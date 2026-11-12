@@ -7,6 +7,11 @@ from config import settings
 
 class User(Base):
     __tablename__ = "users"
+    # AUTOINCREMENT, so sqlite keeps a high-water mark instead of reusing the largest free id.
+    # without it, deleting the newest user hands their id to the next signup, and the deleted
+    # user's token (which carries only that id and stays valid until it expires) would
+    # authenticate as the new account. postgres sequences already behave this way.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False) # stored as typed, uniqueness is checked case-insensitively in the routes
