@@ -27,13 +27,15 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - `schemas.py` — Pydantic v2 models with `ConfigDict(from_attributes=True)`. Paginated lists subclass `PaginatedResponse`.
 - `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. Soft-deleted users are rejected even with a valid token.
 - `routers/users.py` → `/api/users`: register, `POST /token` login (OAuth2 form, `username` = email), `GET /me`, `PATCH /me/password`, get/patch/delete by id (path id must match the token's user), profile picture upload/delete, forgot/reset password.
-- `routers/admins.py` → `/api/admin`: router-level admin dependency. List users, get one, delete one (refuses admins and already-deleted users).
+- `routers/admins.py` → `/api/admin`: router-level admin dependency. List users, get one, delete one (refuses admins).
 - `image_utils.py` — profile pictures live in S3 under `profile_pics/`. Pillow and boto3 are sync, so routes call them through `run_in_threadpool`.
 - `email_utils.py` — async SMTP (`aiosmtplib`) and the password reset email (Jinja template in `templates/email/`).
 
 ### Deleting users
 
-`delete_user_account` in `routers/users.py` hard deletes a user with no history and soft deletes (anonymizes, sets `deleted_at`) a user with history. `user_has_history` decides which, and currently always returns False. When picks and chat messages are added, extend `user_has_history` to check them. Tests that need the soft delete path use the `soft_delete` fixture.
+`delete_user_account` in `routers/users.py` removes the row outright. There is no soft delete: it was removed on purpose to keep the code simple, so a deleted user's row is gone and their token stops working at the next request (`get_current_user` looks the user up every time).
+
+**This is a decision to revisit when picks and chat messages exist.** Rows that other users can still see after an account is gone (a pick on a leaderboard, a message in an old game chat) cannot point at a missing user. Pick one of these then, rather than reintroducing `deleted_at` by reflex: cascade delete the user's picks and messages along with them, or make the author column nullable and render a missing author as "[deleted]".
 
 ## Conventions
 

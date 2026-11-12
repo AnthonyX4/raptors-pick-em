@@ -1,4 +1,3 @@
-import secrets
 from typing import Annotated
 from datetime import datetime, UTC, timedelta
 
@@ -98,12 +97,8 @@ async def login_for_access_token(
 ):
     # Look up user by email (case-insensitive)
     # Note: OAuth2PasswordRequestForm uses "username" field, but we treat it as email
-    # soft-deleted users are excluded, matching get_current_user (their credentials are also scrubbed in delete_user)
     result = await db.execute(
-        select(models.User).where(
-            func.lower(models.User.email) == form_data.username.lower(),
-            models.User.deleted_at.is_(None),
-        ),
+        select(models.User).where(func.lower(models.User.email) == form_data.username.lower()),
     )
     user = result.scalars().first()
 
@@ -144,12 +139,8 @@ async def forgot_password(
     background_tasks: BackgroundTasks,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    # soft-deleted users are excluded, their rows are anonymized and the account can't be recovered
     result = await db.execute(
-        select(models.User).where(
-            func.lower(models.User.email) == request_data.email.lower(),
-            models.User.deleted_at.is_(None),
-        ),
+        select(models.User).where(func.lower(models.User.email) == request_data.email.lower()),
     )
     user = result.scalars().first()
 
@@ -204,12 +195,7 @@ async def reset_password(
         await db.commit()
         raise invalid_reset_token()
 
-    result = await db.execute(
-        select(models.User)
-        .where(models.User.user_id == reset_token.user_id)
-        .where(models.User.deleted_at.is_(None)),
-    )
-    user = result.scalars().first()
+    user = await db.get(models.User, reset_token.user_id) # the account may have been deleted since the link was sent
 
     if not user:
         raise invalid_reset_token()
@@ -272,13 +258,7 @@ async def change_password(
 )
 async def get_user(user_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
 
-    # soft-deleted users are hidden, to the outside they no longer exist
-    result = await db.execute(
-        select(models.User)
-        .where(models.User.user_id == user_id)
-        .where(models.User.deleted_at.is_(None))
-    )
-    existing_user = result.scalars().first()
+    existing_user = await db.get(models.User, user_id)
 
     if not existing_user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -344,8 +324,7 @@ async def update_user(user_update: UserUpdate, user: OwnedUser, db: Annotated[As
     return user
 
 # DELETE, delete user
-# users with no history are hard deleted
-# users with history are soft deleted + anonymized so what they left behind still points at a user row
+# the row is removed outright, which also cascades to any pending reset tokens
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -354,29 +333,11 @@ async def delete_user(user: OwnedUser, db: Annotated[AsyncSession, Depends(get_d
     await delete_user_account(user, db)
 
 
-# history = rows other users can still see after the account is gone (picks on a leaderboard, chat messages)
-# nothing creates that yet, so every delete is a hard delete for now, the picks and messages steps add their checks here
-async def user_has_history(db: AsyncSession, user: models.User) -> bool:
-    return False
-
-
 # shared by the route above (a user deleting themselves) and DELETE /api/admin/users/{user_id}
 async def delete_user_account(user: models.User, db: AsyncSession) -> None:
-    has_history = await user_has_history(db, user)
-
     old_filename = user.image_file
 
-    if has_history:
-        # scrub personal data, the row stays so the user's history still points at something
-        user.username = f"[deleted-{user.user_id}]" # brackets fail USERNAME_PATTERN, so no real user can already have it
-        user.email = f"deleted-{user.user_id}@invalid.example" # .example is reserved (RFC 2606) and, unlike .invalid, passes EmailStr
-        user.password_hash = hash_password(secrets.token_urlsafe(32)) # destroy the old hash, leave a well-formed one nothing can match
-        user.image_file = None # the picture is personal data too
-        user.deleted_at = datetime.now(UTC)
-        await db.refresh(user, attribute_names=["reset_tokens"]) # load it up front, async can't lazy load it on access
-        user.reset_tokens.clear() # delete-orphan cascade removes any pending reset links
-    else:
-        await db.delete(user) # awaited because the cascade may need to load reset_tokens before deleting them
+    await db.delete(user) # awaited because the cascade may need to load reset_tokens before deleting them
     await db.commit()
 
     # file is removed only after the commit succeeds, if the commit failed the user would still point at it

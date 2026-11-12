@@ -26,7 +26,7 @@ def test_username_is_required(client, db):
     assert response.status_code == 422
 
 
-@pytest.mark.parametrize("username", ["", "a" * 51, "has space", "[deleted-1]", "me@home"])
+@pytest.mark.parametrize("username", ["", "a" * 51, "has space", "[brackets]", "me@home"])
 def test_invalid_usernames_are_rejected(client, db, username):
     assert register(client, username).status_code == 422
 
@@ -62,11 +62,10 @@ def test_cannot_take_another_users_username(client, user_headers):
     assert me(client, user_headers)["username"] == "customer"
 
 
-def test_soft_delete_frees_the_username(client, user_headers, soft_delete):
+def test_deleting_the_account_frees_the_username(client, user_headers):
     user_id = me(client, user_headers)["user_id"]
     assert client.delete(f"/api/users/{user_id}", headers=user_headers).status_code == 204
 
-    # the old row was anonymized, so the name can be registered again
     assert register(client, "customer").status_code == 201
 
 

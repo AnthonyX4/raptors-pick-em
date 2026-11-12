@@ -137,23 +137,13 @@ def test_changing_password_kills_a_pending_link(client, user_headers, outbox):
     assert login(client, "changedpass789").status_code == 200
 
 
-def test_soft_deleted_user_cannot_reset(client, user_headers, soft_delete, outbox, db):
+def test_deleting_the_account_kills_a_pending_link(client, user_headers, outbox, db):
     user_id = me(client, user_headers)["user_id"]
     request_reset(client) # a link that's still pending when the account is deleted
 
     assert client.delete(f"/api/users/{user_id}", headers=user_headers).status_code == 204
-    assert reset_tokens(db) == []
+    assert reset_tokens(db) == [] # the cascade took the token with the user
     assert reset(client, token_from(outbox[0])).status_code == 400
 
-    # neither the old address nor the anonymized one gets a new link
-    request_reset(client, EMAIL)
-    request_reset(client, f"deleted-{user_id}@invalid.example")
+    request_reset(client, EMAIL) # and the address gets no new link
     assert len(outbox) == 1
-
-
-def test_hard_delete_removes_pending_tokens(client, user_headers, outbox, db):
-    user_id = me(client, user_headers)["user_id"]
-    request_reset(client)
-
-    assert client.delete(f"/api/users/{user_id}", headers=user_headers).status_code == 204
-    assert reset_tokens(db) == []

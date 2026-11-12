@@ -4,7 +4,6 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from PIL import Image
 
 import image_utils
-import models
 from config import settings
 
 # s3_bucket (conftest.py, autouse) is a dict of {key: bytes} standing in for the real bucket
@@ -150,18 +149,9 @@ def test_delete_picture_when_none(client, user_headers):
     assert client.delete(f"/api/users/{user_id}/picture", headers=user_headers).status_code == 400
 
 
-def test_hard_delete_user_removes_picture(client, user_headers, s3_bucket):
+def test_delete_user_removes_picture(client, user_headers, s3_bucket):
     user_id = me(client, user_headers)["user_id"]
     upload(client, user_headers, user_id, make_image())
 
     assert client.delete(f"/api/users/{user_id}", headers=user_headers).status_code == 204
     assert s3_bucket == {}
-
-
-def test_soft_delete_user_removes_picture(client, user_headers, soft_delete, s3_bucket, db):
-    user_id = me(client, user_headers)["user_id"]
-    upload(client, user_headers, user_id, make_image())
-
-    assert client.delete(f"/api/users/{user_id}", headers=user_headers).status_code == 204
-    assert s3_bucket == {}
-    assert db.get(models.User, user_id).image_file is None

@@ -14,7 +14,6 @@ class User(Base):
 
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)
     is_admin: Mapped[bool] = mapped_column(default=False) # only set with harvest_scripts/make_admin.py, never through the api
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None) # set when a user with history is "deleted", see delete_user_account
     image_file: Mapped[str | None] = mapped_column(String(200), default=None) # filename under profile_pics/ in the S3 bucket, None means the default picture
     reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

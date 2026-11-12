@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # Pagination
@@ -10,8 +8,7 @@ class PaginatedResponse(BaseModel):
     limit: int
     has_more: bool # true when another page exists after this one
 
-# letters, digits, _ and - only: usernames end up in frontend urls,
-# and soft-deleted users get "[deleted-<id>]", which this pattern can never produce, so a real user can't take it first
+# letters, digits, _ and - only: usernames end up in frontend urls
 USERNAME_PATTERN = r"^[A-Za-z0-9_-]+$"
 
 class UserBase(BaseModel):
@@ -65,7 +62,6 @@ class AdminUserResponse(BaseModel):
     username: str
     email: EmailStr
     is_admin: bool
-    deleted_at: datetime | None # set for soft-deleted users, see delete_user_account
 
 class PaginatedAdminUsersResponse(PaginatedResponse):
     users: list[AdminUserResponse]

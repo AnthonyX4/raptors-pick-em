@@ -22,11 +22,9 @@ import models
 
 
 async def set_admin(db: AsyncSession, email: str, is_admin: bool = True) -> bool:
-    """Set is_admin on the active user with this email, returns False if there is no such user."""
+    """Set is_admin on the user with this email, returns False if there is no such user."""
     result = await db.execute(
-        select(models.User)
-        .where(func.lower(models.User.email) == email.lower())
-        .where(models.User.deleted_at.is_(None))
+        select(models.User).where(func.lower(models.User.email) == email.lower()),
     )
     user = result.scalars().first()
 

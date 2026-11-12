@@ -44,7 +44,6 @@ import main
 import models
 import email_utils
 import image_utils
-from routers import users as users_router
 
 PASSWORD = "password123"
 
@@ -97,16 +96,6 @@ def client(db):
     with TestClient(main.app) as test_client:
         yield test_client
     main.app.dependency_overrides.clear()
-
-
-@pytest.fixture
-def soft_delete(monkeypatch):
-    # deleting a user with history is a soft delete, but nothing in the app creates history yet (picks and messages come later)
-    # until then, tests that need the soft delete path ask for this fixture, which makes every user count as having history
-    async def has_history(db, user):
-        return True
-
-    monkeypatch.setattr(users_router, "user_has_history", has_history)
 
 
 def register_and_login(client, email: str, username: str | None = None) -> dict:

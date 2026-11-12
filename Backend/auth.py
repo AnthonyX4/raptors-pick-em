@@ -10,7 +10,6 @@ from fastapi import Depends, status, HTTPException
 # Database
 from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 import models
 
 import jwt
@@ -102,13 +101,8 @@ async def get_current_user(
     except (TypeError, ValueError):
         raise credentials_exception()
 
-    # soft-deleted users are excluded: their tokens stay signed and unexpired after deletion
-    result = await db.execute(
-        select(models.User)
-        .where(models.User.user_id == user_id_int)
-        .where(models.User.deleted_at.is_(None)),
-    )
-    user = result.scalars().first()
+    # a deleted user's token stays signed and unexpired, but there's no row to find, so it stops working
+    user = await db.get(models.User, user_id_int)
     if not user:
         raise credentials_exception()
     return user

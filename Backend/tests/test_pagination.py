@@ -66,14 +66,8 @@ def test_out_of_range_params_are_422(client, admin_headers, params):
     assert client.get("/api/admin/users", params=params, headers=admin_headers).status_code == 422
 
 
-def test_total_respects_include_deleted(client, admin_headers, user_headers, soft_delete):
-    me = client.get("/api/users/me", headers=user_headers).json()
-    client.delete(f"/api/users/{me['user_id']}", headers=user_headers)
-
-    everyone = client.get("/api/admin/users", params={"limit": 1}, headers=admin_headers).json()
-    assert everyone["total"] == 2
-    assert everyone["has_more"] is True
-
-    active = client.get("/api/admin/users", params={"include_deleted": False}, headers=admin_headers).json()
-    assert active["total"] == 1
-    assert active["has_more"] is False
+def test_total_counts_rows_beyond_the_page(client, admin_headers, user_headers):
+    page = client.get("/api/admin/users", params={"limit": 1}, headers=admin_headers).json()
+    assert page["total"] == 2 # the admin and the customer
+    assert len(page["users"]) == 1
+    assert page["has_more"] is True
