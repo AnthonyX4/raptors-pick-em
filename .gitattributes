@@ -1,0 +1,4 @@
+# store text files with LF in the repo whatever the OS, so Windows and Linux/Docker checkouts don't show every line as changed
+* text=auto
+*.jpg binary
+*.png binary

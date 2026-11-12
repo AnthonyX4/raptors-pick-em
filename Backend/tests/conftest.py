@@ -1,0 +1,134 @@
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
+
+# config.py reads its settings on import and has no default for these two, so a fresh clone with no .env can still run the tests
+# real environment variables win over .env, so the tests also never see the real key or bucket name
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
+os.environ.setdefault("S3_BUCKET_NAME", "test-bucket")
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BACKEND_DIR)) # so main/models/database are importable when pytest runs from anywhere
+
+import database
+
+# swap in a throwaway database BEFORE main is imported, main's lifespan create_all must never touch raptors.db
+# it's a temp file rather than in-memory so two engines can share it:
+#   - the app gets an async (aiosqlite) engine, same as production
+#   - fixtures get a plain sync engine, so tests can set up and inspect data without an event loop
+TEST_DB_DIR = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+TEST_DB_PATH = Path(TEST_DB_DIR.name) / "test.db"
+
+# NullPool opens a fresh connection per session, so no connection is reused across the event loops
+# TestClient and asyncio.run create (a pooled aiosqlite connection is tied to the loop that opened it)
+test_async_engine = create_async_engine(
+    f"sqlite+aiosqlite:///{TEST_DB_PATH}",
+    connect_args={"check_same_thread": False},
+    poolclass=NullPool,
+)
+database.engine = test_async_engine
+TestAsyncSession = async_sessionmaker(test_async_engine, class_=AsyncSession, expire_on_commit=False)
+
+test_sync_engine = create_engine(f"sqlite:///{TEST_DB_PATH}", poolclass=NullPool)
+TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_sync_engine)
+
+import main
+import models
+import email_utils
+import image_utils
+from routers import users as users_router
+
+PASSWORD = "password123"
+
+
+async def get_test_db():
+    async with TestAsyncSession() as db:
+        yield db
+
+
+@pytest.fixture
+def db():
+    # fresh tables for every test so tests can't leak data into each other
+    database.Base.metadata.create_all(bind=test_sync_engine)
+    with TestSession() as session:
+        yield session
+    database.Base.metadata.drop_all(bind=test_sync_engine)
+
+
+@pytest.fixture(autouse=True)
+def outbox(monkeypatch):
+    # every email a test triggers is recorded here instead of sent, .env has real smtp credentials
+    sent = []
+
+    async def fake_send_email(to_email, subject, plain_text, html_content=None):
+        sent.append({"to_email": to_email, "subject": subject, "plain_text": plain_text, "html_content": html_content})
+
+    monkeypatch.setattr(email_utils, "send_email", fake_send_email)
+    return sent
+
+
+@pytest.fixture(autouse=True)
+def s3_bucket(monkeypatch):
+    # a dict standing in for the bucket ({key: bytes}), .env has real AWS credentials and tests must never use them
+    bucket = {}
+
+    def fake_upload(file_bytes, key):
+        bucket[key] = file_bytes
+
+    def fake_delete(key):
+        bucket.pop(key, None) # like S3, deleting a missing key isn't an error
+
+    monkeypatch.setattr(image_utils, "_upload_to_s3", fake_upload)
+    monkeypatch.setattr(image_utils, "_delete_from_s3", fake_delete)
+    return bucket
+
+
+@pytest.fixture
+def client(db):
+    main.app.dependency_overrides[database.get_db] = get_test_db
+    with TestClient(main.app) as test_client:
+        yield test_client
+    main.app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def soft_delete(monkeypatch):
+    # deleting a user with history is a soft delete, but nothing in the app creates history yet (picks and messages come later)
+    # until then, tests that need the soft delete path ask for this fixture, which makes every user count as having history
+    async def has_history(db, user):
+        return True
+
+    monkeypatch.setattr(users_router, "user_has_history", has_history)
+
+
+def register_and_login(client, email: str, username: str | None = None) -> dict:
+    """Create a user through the API and return headers carrying their token."""
+    username = username or email.split("@")[0] # "customer@example.com" registers as "customer"
+    response = client.post("/api/users", json={"username": username, "email": email, "password": PASSWORD})
+    assert response.status_code == 201
+    response = client.post("/api/users/token", data={"username": email, "password": PASSWORD})
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest.fixture
+def user_headers(client):
+    return register_and_login(client, "customer@example.com")
+
+
+@pytest.fixture
+def admin_headers(client, db):
+    headers = register_and_login(client, "admin@example.com")
+    # promoted directly in the db, the same way make_admin.py does, the api has no way to do this
+    admin = db.execute(select(models.User).where(models.User.email == "admin@example.com")).scalars().one()
+    admin.is_admin = True
+    db.commit()
+    return headers
