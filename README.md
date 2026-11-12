@@ -9,10 +9,10 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | Step | What | State |
 |---|---|---|
 | 1 | Project skeleton: accounts, JWT auth, password reset emails, profile pictures on S3, admin users | Done |
-| 2 | NBA data models (teams, players, games, box scores) | Next |
-| 3 | Harvest and seed scripts (nba_api) | |
-| 4 | Games and players routers | |
-| 5 | Pick categories | |
+| 2 | NBA data models (teams, players, games, box scores) | Done |
+| 3 | Harvest and seed scripts (nba_api) | Done |
+| 4 | Games and players routers | Done |
+| 5 | Pick categories | Next |
 | 6 | Picks (locked at tipoff) | |
 | 7 | Results and scoring | |
 | 8 | Leaderboard | |
@@ -29,9 +29,17 @@ All commands run from `Backend/`. You need [uv](https://docs.astral.sh/uv/).
 
 ```
 uv sync
-cp .env.example .env        # then fill in the values
-uv run fastapi dev main.py  # http://localhost:8000, docs at /docs
-uv run pytest               # needs no .env, S3 and email are faked
+cp .env.example .env                       # then fill in the values
+uv run python harvest_scripts/seed.py      # loads nba_data.json into raptors.db
+uv run fastapi dev main.py                 # http://localhost:8000, docs at /docs
+uv run pytest                              # needs no .env, S3 and email are faked
+```
+
+To refresh the season's data (scores, rosters, new box scores), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
+
+```
+uv run python harvest_scripts/harvest.py   # must run on a normal machine, nba.com blocks cloud IPs
+uv run python harvest_scripts/seed.py
 ```
 
 Make an existing user an admin (there is no endpoint for this on purpose):

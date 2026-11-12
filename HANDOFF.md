@@ -1,13 +1,14 @@
 # Handoff
 
-Written 2026-11-12, at the end of step 1. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated at the end of step 4. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Step 1 is done: accounts, JWT auth, password reset emails, profile pictures on S3, admin user routes.
-- 75 tests pass (`cd Backend && uv run pytest`).
-- Three commits on `main`, local only. No remote is configured yet.
-- Steps 2 to 12 are not started. Nothing NBA-related exists: the database has `users` and `password_reset_tokens` and nothing else.
+- Steps 1 to 4 are done: accounts and auth, plus the real 2026-27 Raptors season in the database and readable at `/api/games` and `/api/players`.
+- 107 tests pass (`cd Backend && uv run pytest`).
+- Commits on `main`, local only. No remote is configured yet.
+- `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
+- Steps 5 to 12 are not started.
 
 ## Decisions already made
 
@@ -43,17 +44,26 @@ Not built yet. These were worked out in discussion and should be followed unless
 
 **One poller, not one per container** (step 11). A loop started in `main.py`'s `lifespan` runs once per container, so two containers on ECS would double-poll and race. Either run it as a separate single-task service or take a lock in Redis. Note it in the code even while running a single container.
 
+## Learned from the real data (step 3)
+
+- **Ties are real and common.** In the season opener, Leonard, Barnes and Quickley all scored 23. The tie rule agreed above (picking any tied leader counts as correct) is not an edge case; step 7 must handle it from the start.
+- **The schedule returned 80 games, not 82.** Unverified why. In-season tournament games are scheduled late, so check whether a later harvest picks up the other two before assuming a bug.
+- **`Player.team_id` is a snapshot** from harvest time. A trade only shows after a re-harvest. Box score lines record the team the player actually played for, so history stays right.
+- **`nba_api` pulls in pandas and numpy.** Fine for the harvest scripts, but it bloats the API's Docker image for code the API never runs. When containerizing, consider moving `nba-api` to a separate dependency group for the scripts, with only the step 11 poller needing it at runtime.
+
 ## Open
 
-- **Delete `Backend/raptors.db` before running the server again.** Its `users` table predates both the soft-delete removal and `AUTOINCREMENT`, and `create_all` never alters an existing table.
 - No GitHub remote yet. Commits are local; `git remote add origin ...` and push whenever.
 - Frontend is untouched. The sneaker store's React app was deliberately not copied.
 - Not decided: whether private friend leagues (step 5-8 era) are worth building, and whether reactions (step 10) are needed at all.
 
-## Next: step 2
+## Next: steps 5 and 6
 
-NBA data models: `Team`, `Player`, `Game`, and a per-game player stat table, plus their Pydantic schemas.
+Pick categories (step 5) and picks (step 6), as one batch. This is where the product decisions live, so expect to settle these with Anthony first:
 
-Before writing the columns, check what `nba_api` actually returns for a Raptors schedule and a box score, so the fields match the real payloads rather than a guess. A model change later means deleting the database.
+- Which categories ship at launch and their starting weights (calibration from box scores can come later).
+- Pick a player from the Raptors roster only, or from both teams? The data supports either.
+- What happens to picks on a postponed game: void them, or carry them to the rescheduled date.
+- The cascade-or-nullable choice for a deleted user's picks (see "No soft delete" above).
 
-Things the models need to support, decided above: a `Game` carries live state (score, period, clock, status) written by the poller and a `scored_at` timestamp; the box score table is per player per game and is what scoring reads.
+Already in place for them: `Game.tipoff_utc` is timezone-aware, so the lock is a plain `game.tipoff_utc <= datetime.now(UTC)`; `/api/players?team=&search=` is the roster lookup a pick form needs; `Game.scored_at` exists for step 7's idempotency.

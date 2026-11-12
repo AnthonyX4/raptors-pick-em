@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+from datetime import datetime, UTC
 from pathlib import Path
 
 import pytest
@@ -96,6 +97,88 @@ def client(db):
     with TestClient(main.app) as test_client:
         yield test_client
     main.app.dependency_overrides.clear()
+
+
+# --- NBA fixtures -----------------------------------------------------------
+# a miniature season: three teams, four games (one in a previous season, one not yet played)
+# and a box score for the first game. small enough to assert on exactly, shaped like real data
+
+TOR, BOS, MIA = 1610612761, 1610612738, 1610612748
+
+
+@pytest.fixture
+def teams(db):
+    rows = [
+        models.Team(team_id=TOR, tricode="TOR", city="Toronto", nickname="Raptors", full_name="Toronto Raptors"),
+        models.Team(team_id=BOS, tricode="BOS", city="Boston", nickname="Celtics", full_name="Boston Celtics"),
+        models.Team(team_id=MIA, tricode="MIA", city="Miami", nickname="Heat", full_name="Miami Heat"),
+    ]
+    db.add_all(rows)
+    db.commit()
+    return {team.tricode: team.team_id for team in rows}
+
+
+@pytest.fixture
+def games(db, teams):
+    """Returns the game ids in the order the api should list them, oldest first."""
+    rows = [
+        models.Game(
+            game_id="0022500001", season="2025-26", tipoff_utc=datetime(2026, 1, 5, 0, 0, tzinfo=UTC),
+            status="final", status_text="Final", home_team_id=TOR, away_team_id=MIA,
+            home_score=101, away_score=99, arena_name="Scotiabank Arena",
+        ),
+        models.Game(
+            game_id="0022600001", season="2026-27", tipoff_utc=datetime(2026, 10, 22, 23, 30, tzinfo=UTC),
+            status="final", status_text="Final", home_team_id=TOR, away_team_id=BOS,
+            home_score=115, away_score=108, arena_name="Scotiabank Arena",
+        ),
+        models.Game(
+            game_id="0022600002", season="2026-27", tipoff_utc=datetime(2026, 10, 25, 0, 0, tzinfo=UTC),
+            status="final", status_text="Final", home_team_id=MIA, away_team_id=TOR,
+            home_score=97, away_score=104, arena_name="Kaseya Center",
+        ),
+        models.Game(
+            game_id="0022600003", season="2026-27", tipoff_utc=datetime(2026, 12, 1, 0, 30, tzinfo=UTC),
+            status="scheduled", status_text="7:30 pm ET", home_team_id=TOR, away_team_id=BOS,
+            arena_name="Scotiabank Arena",
+        ),
+    ]
+    db.add_all(rows)
+    db.commit()
+    return [game.game_id for game in rows]
+
+
+@pytest.fixture
+def players(db, teams):
+    rows = [
+        models.Player(player_id=1, full_name="Scottie Barnes", first_name="Scottie", last_name="Barnes",
+                      team_id=TOR, jersey_number="4", position="F"),
+        models.Player(player_id=2, full_name="Immanuel Quickley", first_name="Immanuel", last_name="Quickley",
+                      team_id=TOR, jersey_number="5", position="G"),
+        models.Player(player_id=3, full_name="Jayson Tatum", first_name="Jayson", last_name="Tatum",
+                      team_id=BOS, jersey_number="0", position="F"),
+        models.Player(player_id=4, full_name="Free Agent", first_name="Free", last_name="Agent",
+                      team_id=None), # in an old box score, on nobody's roster now
+    ]
+    db.add_all(rows)
+    db.commit()
+    return [player.player_id for player in rows]
+
+
+@pytest.fixture
+def box_score(db, games, players):
+    """The first 2026-27 game's box score. Deliberately not in points order."""
+    db.add_all([
+        models.PlayerGameStat(game_id="0022600001", player_id=1, team_id=TOR, minutes="34:12",
+                              points=22, rebounds_offensive=2, rebounds_defensive=7, rebounds_total=9,
+                              assists=5, steals=2, blocks=1, turnovers=3, three_pointers_made=2),
+        models.PlayerGameStat(game_id="0022600001", player_id=3, team_id=BOS, minutes="36:40",
+                              points=30, rebounds_offensive=1, rebounds_defensive=5, rebounds_total=6,
+                              assists=4, steals=1, blocks=0, turnovers=2, three_pointers_made=4),
+        models.PlayerGameStat(game_id="0022600001", player_id=2, team_id=TOR, minutes=None,
+                              comment="DNP - Coach's Decision"),
+    ])
+    db.commit()
 
 
 def register_and_login(client, email: str, username: str | None = None) -> dict:

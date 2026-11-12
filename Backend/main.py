@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from routers import admins, users
+from routers import admins, games, players, users
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -48,9 +48,12 @@ app.add_middleware(
 )
 
 app.include_router(users.router, prefix="/api/users", tags=["users"])
+app.include_router(games.router, prefix="/api/games", tags=["games"])
+app.include_router(players.router, prefix="/api/players", tags=["players"])
 app.include_router(admins.router, prefix="/api/admin", tags=["admin"])
 
-# GET, a quick "is the api up" check, the home feed (upcoming games) replaces this once games exist
+# GET, a quick "is the api up" check. kept deliberately cheap: it touches no database and is what a
+# container health check will hit. the frontend reads its home feed from /api/games?status=scheduled
 @app.get(
     "/",
     response_model=MessageResponse,

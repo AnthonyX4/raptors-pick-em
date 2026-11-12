@@ -23,8 +23,13 @@ class Settings(BaseSettings):
     s3_secret_access_key: SecretStr | None = None
     s3_endpoint_url: str | None = None # only for S3 compatible services (MinIO, Cloudflare R2), None means real AWS
 
+    # the team this app follows, as its nba tricode. the harvest keeps only this team's games,
+    # and ?opponent= is matched against whichever side of a game isn't this one
+    team_tricode: str = "TOR"
+
     # pagination: the page size used when a request doesn't pass ?limit=
     items_per_page: int = 10 # the admin lists
+    games_per_page: int = 20 # a month of games fits on one page
     max_page_size: int = 100 # the largest ?limit= a request may ask for
 
     reset_token_expire_minutes: int = 60 # how long a password reset link works for

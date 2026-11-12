@@ -10,6 +10,7 @@ dependencies = [
     "boto3>=1.44.0",
     "fastapi[standard]>=0.141.1",
     "httpx>=0.28.1",
+    "nba-api>=1.10.0", # harvest scripts now, the step 11 live-score poller later
     "pillow>=13.0.0",
     "pwdlib[argon2]>=0.3.1",
     "pydantic-settings>=2.15.0",

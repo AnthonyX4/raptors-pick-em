@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project overview
 
-Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chatroom. Backend only so far.
+Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chatroom. Backend only so far. `HANDOFF.md` has the decisions made so far and the design agreed for steps not yet built.
 
 - `Backend/` — FastAPI + SQLAlchemy 2.x (async, `aiosqlite` driver), managed with `uv`, Python >=3.14.
 - Built step by step, the plan and current state are the table in `README.md`. Keep that table up to date when a step is finished.
@@ -17,17 +17,22 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - Tests: `uv run pytest`. They need no `.env`: `conftest.py` sets `SECRET_KEY`/`S3_BUCKET_NAME`, and the autouse `s3_bucket` and `outbox` fixtures replace S3 and email with in-memory fakes.
 - Grant admin: `uv run python harvest_scripts/make_admin.py <email> [--revoke]` (deliberately no endpoint).
 - Verify the real bucket: `uv run check_s3.py`.
+- Load NBA data: `uv run python harvest_scripts/seed.py` (reads the committed `nba_data.json`). Refresh it with `harvest_scripts/harvest.py`, which only works off-cloud.
 
 ## Architecture
 
 - `main.py` — app entrypoint. Creates tables in the `lifespan` startup with `Base.metadata.create_all` (**no Alembic**: changing a model means deleting `raptors.db`). CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a placeholder health message until games exist.
 - `config.py` — `Settings` (pydantic-settings) read from `.env`. `app_name` is the display name used in the docs and emails.
 - `database.py` — async engine on `raptors.db` (anchored to `Backend/`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency.
-- `models.py` — `User`, `PasswordResetToken` (`Mapped`/`mapped_column` style).
+- `models.py` — `User`, `PasswordResetToken`, and the NBA data: `Team`, `Player`, `Game`, `PlayerGameStat` (`Mapped`/`mapped_column` style). NBA rows use the NBA's own ids as primary keys, which is what makes re-seeding an update rather than a duplicate. Every datetime column is `UTCDateTime`, never a plain `DateTime`.
 - `schemas.py` — Pydantic v2 models with `ConfigDict(from_attributes=True)`. Paginated lists subclass `PaginatedResponse`.
 - `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. Soft-deleted users are rejected even with a valid token.
 - `routers/users.py` → `/api/users`: register, `POST /token` login (OAuth2 form, `username` = email), `GET /me`, `PATCH /me/password`, get/patch/delete by id (path id must match the token's user), profile picture upload/delete, forgot/reset password.
 - `routers/admins.py` → `/api/admin`: router-level admin dependency. List users, get one, delete one (refuses admins).
+- `routers/games.py` → `/api/games`: public. Paginated list, oldest first, filtered by `?season=`, `?status=`, `?opponent=` (a tricode, 400 if unknown). Detail includes the box score, highest scorer first.
+- `routers/players.py` → `/api/players`: public. Paginated list by name, filtered by `?team=` and `?search=`, and get by id.
+- `harvest_scripts/harvest.py` — pulls teams (offline dataset), the followed team's schedule, every roster on that schedule, and finished games' box scores into `nba_data.json`, already shaped like the models. Translates the NBA's integer game status into `GameStatus` so nothing downstream sees it.
+- `harvest_scripts/seed.py` — upserts `nba_data.json`. Creates a `Player` for anyone in a box score but on no roster.
 - `image_utils.py` — profile pictures live in S3 under `profile_pics/`. Pillow and boto3 are sync, so routes call them through `run_in_threadpool`.
 - `email_utils.py` — async SMTP (`aiosmtplib`) and the password reset email (Jinja template in `templates/email/`).
 
@@ -46,6 +51,8 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - Sync or CPU-bound work (Pillow, boto3, and later `nba_api`, which uses `requests`) goes through `run_in_threadpool`.
 - Never call `nba_api` from a request handler: stats.nba.com is slow, rate limited and blocks cloud provider IPs. NBA data is loaded into the database by scripts and background tasks, and endpoints read only from the database.
 - Comments are lowercase, explain why rather than what, and sit at the end of the line or just above the code.
+- Datetime columns use `UTCDateTime` (models.py). SQLite drops the timezone, and a naive datetime both serializes without an offset (a browser reads it as local time) and can't be compared with `datetime.now(UTC)`.
+- The followed team is `settings.team_tricode` ("TOR"), never hardcoded.
 
 ## Known issues
 
