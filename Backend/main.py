@@ -6,6 +6,7 @@ from fastapi.exception_handlers import http_exception_handler, request_validatio
 
 # Database
 from database import engine, Base
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 
@@ -20,13 +21,17 @@ from fastapi.staticfiles import StaticFiles
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from routers import admins, games, players, users
+from routers import admins, games, pick_categories, picks, players, users
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Startup: table creation in database (create_all is sync, run_sync runs it on the async connection)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    # a session on this module's engine, not database.AsyncSessionLocal: the tests swap the engine
+    # before main is imported, and the session factory would still point at the real database
+    async with AsyncSession(engine, expire_on_commit=False) as db:
+        await pick_categories.ensure_default_categories(db)
     yield
     # Shutdown
     await engine.dispose()
@@ -50,6 +55,8 @@ app.add_middleware(
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(games.router, prefix="/api/games", tags=["games"])
 app.include_router(players.router, prefix="/api/players", tags=["players"])
+app.include_router(pick_categories.router, prefix="/api/pick-categories", tags=["picks"])
+app.include_router(picks.router, prefix="/api/picks", tags=["picks"])
 app.include_router(admins.router, prefix="/api/admin", tags=["admin"])
 
 # GET, a quick "is the api up" check. kept deliberately cheap: it touches no database and is what a

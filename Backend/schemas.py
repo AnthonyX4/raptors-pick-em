@@ -150,3 +150,102 @@ class PaginatedGamesResponse(PaginatedResponse):
 class GameDetail(GameResponse):
     # the box score, empty until a finished game has been ingested (step 7)
     player_stats: list[PlayerGameStatResponse]
+
+
+
+# --- Pick'em ----------------------------------------------------------------
+
+class CategoryKind(StrEnum):
+    # what a category asks, which decides the answer field a pick must fill in
+    WINNER = "winner" # team_id: one of the two teams in the game
+    MARGIN = "margin" # margin: the winning margin in points, whoever wins
+    STAT_LEADER = "stat_leader" # player_id: the Raptor who leads the game in `stat`
+
+
+class LeaderStat(StrEnum):
+    # the PlayerGameStat columns a stat leader category may be about. a closed list, so an admin
+    # can't create a category scoring couldn't evaluate
+    POINTS = "points"
+    REBOUNDS_TOTAL = "rebounds_total"
+    REBOUNDS_OFFENSIVE = "rebounds_offensive"
+    REBOUNDS_DEFENSIVE = "rebounds_defensive"
+    ASSISTS = "assists"
+    STEALS = "steals"
+    BLOCKS = "blocks"
+    THREE_POINTERS_MADE = "three_pointers_made"
+
+
+class PickCategoryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    pick_category_id: int
+    key: str
+    kind: CategoryKind
+    stat: LeaderStat | None
+    name: str
+    points: int
+    is_required: bool
+    is_active: bool
+    sort_order: int
+
+
+class PickCategoryCreate(BaseModel):
+    kind: CategoryKind
+    stat: LeaderStat | None = None # required for a stat leader, must be empty otherwise (checked in the route)
+    name: str = Field(min_length=1, max_length=100)
+    points: int = Field(ge=1, le=100)
+    is_required: bool = False
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class PickCategoryUpdate(BaseModel):
+    # kind and stat can't change: existing picks were answers to the question as it was asked
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    points: int | None = Field(default=None, ge=1, le=100)
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+
+class PickCreate(BaseModel):
+    game_id: str
+    pick_category_id: int
+    # fill in the one field the category's kind asks for: team_id for a winner,
+    # margin for the margin of victory, player_id for a stat leader
+    team_id: int | None = None
+    player_id: int | None = None
+    margin: int | None = Field(default=None, ge=1, le=99)
+
+
+class PickUpdate(BaseModel):
+    # same rule as PickCreate, the game and category stay as they were
+    team_id: int | None = None
+    player_id: int | None = None
+    margin: int | None = Field(default=None, ge=1, le=99)
+
+
+class PickResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    pick_id: int
+    game_id: str
+    category: PickCategoryResponse
+    team: TeamResponse | None
+    player: PlayerResponse | None
+    margin: int | None
+    points_awarded: int | None # None until the game is scored
+    created_at: datetime
+    updated_at: datetime
+
+
+class PickWithUser(PickResponse):
+    user: UserPublic # who made it, for the revealed list of everyone's picks
+
+
+class PaginatedPicksResponse(PaginatedResponse):
+    picks: list[PickResponse]
+
+
+class PaginatedGamePicksResponse(PaginatedResponse):
+    picks: list[PickWithUser]

@@ -1,0 +1,44 @@
+# Checks whether the NBA feeds the production poller (step 11) depends on can be reached from a
+# datacenter ip. stats.nba.com is known to drop connections from cloud providers, which is why the
+# harvest script only runs on a laptop; cdn.nba.com is reported to serve them normally. This turns
+# that report into evidence before anything is built on top of it.
+#
+# GitHub's runners sit on Microsoft Azure, so a pass here is strong evidence, not proof, for AWS.
+# Run it from the Actions tab (it never runs on push: no reason to hit the NBA on every commit).
+name: NBA reachability
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch the feeds
+        shell: bash
+        run: |
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:158.0) Gecko/20100101 Firefox/158.0'
+          failed=0
+
+          probe() { # probe <label> <url> <must-pass:yes|no>
+            : > body.json # empty it first, a failed request leaves no file behind
+            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 20 \
+              -H "User-Agent: $UA" -H 'Referer: https://www.nba.com/' -H 'Accept: application/json' "$2" 2>err.txt) || code="failed: $(head -c 100 err.txt)"
+            size=$(wc -c < body.json 2>/dev/null || echo 0)
+            echo "$1 -> $code ($size bytes)"
+            if [ "$3" = yes ] && [ "$code" != 200 ]; then failed=1; fi
+          }
+
+          echo "--- cdn.nba.com: what the poller will use, these must pass"
+          probe "live scoreboard     " https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json yes
+          probe "box score (opener)  " https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600088.json yes
+          probe "season schedule     " https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json yes
+
+          echo "--- stats.nba.com: what harvest.py uses, expected to be blocked here"
+          probe "stats scoreboard    " "https://stats.nba.com/stats/scoreboardv3?GameDate=2026-11-12&LeagueID=00" no
+
+          if [ $failed = 1 ]; then
+            echo "::error::A cdn.nba.com feed is unreachable from a datacenter ip. The step 11 poller plan needs the home-feeder fallback (see HANDOFF.md)."
+            exit 1
+          fi
+          echo "All cdn.nba.com feeds reachable ✅"

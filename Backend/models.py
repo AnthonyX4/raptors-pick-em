@@ -48,6 +48,10 @@ class User(Base):
     reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    # deleting an account takes its picks with it (decided: no "[deleted]" rows on the leaderboard)
+    picks: Mapped[list["Pick"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
     @property
     def image_path(self) -> str:
@@ -168,3 +172,63 @@ class PlayerGameStat(Base):
 
     game: Mapped["Game"] = relationship(back_populates="player_stats")
     player: Mapped["Player"] = relationship()
+
+
+
+# --- Pick'em ----------------------------------------------------------------
+
+class PickCategory(Base):
+    # one row per question a user can answer about a game. categories are data, not code: an admin
+    # adds "blocks leader" by creating a row, and scoring (step 7) handles it with no new code,
+    # because every stat leader is scored the same way, by the column named in stat
+    __tablename__ = "pick_categories"
+
+    pick_category_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # derived by the server from kind and stat ("winner", "margin", "leader:points"), never sent by a client.
+    # unique, so there's one winner category and one per stat. a unique (kind, stat) pair wouldn't do
+    # it: sql treats NULL stats as distinct, so it would allow two winner rows
+    key: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False) # a CategoryKind value, see schemas.py
+    stat: Mapped[str | None] = mapped_column(String(30), default=None) # a PlayerGameStat column, only for stat leaders
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False) # what the form shows: "Raptors' top scorer"
+    points: Mapped[int] = mapped_column(Integer, nullable=False) # the most a correct answer earns, easier questions are worth less
+    # a user has to make every required pick before any optional one (the winner, by default)
+    is_required: Mapped[bool] = mapped_column(default=False)
+    # deactivating stops new picks but keeps existing ones scored, which is why there's no delete
+    is_active: Mapped[bool] = mapped_column(default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0) # order on the pick form
+
+
+class Pick(Base):
+    # one user's answer to one category for one game. editable until tipoff, then frozen and revealed
+    __tablename__ = "picks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "game_id", "pick_category_id", name="uq_pick"), # one answer per question per game
+    )
+
+    pick_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), nullable=False, index=True)
+    game_id: Mapped[str] = mapped_column(ForeignKey("games.game_id"), nullable=False, index=True)
+    pick_category_id: Mapped[int] = mapped_column(ForeignKey("pick_categories.pick_category_id"), nullable=False)
+
+    # the answer: exactly one of these is set, which one depends on the category's kind.
+    # typed columns rather than one text field, so a picked team or player is a real foreign key
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("teams.team_id"), default=None) # winner
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.player_id"), default=None) # stat leader
+    margin: Mapped[int | None] = mapped_column(Integer, default=None) # margin of victory
+
+    # None until step 7 scores the game. stored rather than recomputed, like OrderItem.fixed_price:
+    # the pick was judged against one box score, and changing a category's weight later shouldn't rewrite it
+    points_awarded: Mapped[int | None] = mapped_column(Integer, default=None)
+
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC),
+    )
+
+    user: Mapped["User"] = relationship(back_populates="picks")
+    game: Mapped["Game"] = relationship()
+    category: Mapped["PickCategory"] = relationship()
+    team: Mapped["Team | None"] = relationship()
+    player: Mapped["Player | None"] = relationship()

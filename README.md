@@ -12,9 +12,10 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 2 | NBA data models (teams, players, games, box scores) | Done |
 | 3 | Harvest and seed scripts (nba_api) | Done |
 | 4 | Games and players routers | Done |
-| 5 | Pick categories | Next |
-| 6 | Picks (locked at tipoff) | |
-| 7 | Results and scoring | |
+| 4.5 | Check the NBA's CDN is reachable from a datacenter IP | Done: run the workflow once the repo is on GitHub |
+| 5 | Pick categories | Done |
+| 6 | Picks (locked at tipoff) | Done |
+| 7 | Results and scoring | Next |
 | 8 | Leaderboard | |
 | 9 | Game chat messages | |
 | 10 | Reactions and moderation | |
