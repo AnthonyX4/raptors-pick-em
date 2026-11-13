@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal, Base, engine
 import models
+from schemas import can_move_status
 
 DATA_PATH = BACKEND_DIR / "nba_data.json"
 
@@ -68,6 +69,11 @@ async def seed_games(db: AsyncSession, games: list[dict]) -> dict:
     for game in games:
         fields = dict(game)
         fields["tipoff_utc"] = datetime.fromisoformat(fields["tipoff_utc"]) # json has no datetime type
+        current = existing.get(game["game_id"])
+        if current is not None and not can_move_status(current.status, fields["status"]):
+            # an older file than what the poller has since written: keep the newer state and score
+            for name in ("status", "status_text", "home_score", "away_score"):
+                fields.pop(name)
         counts[upsert(db, models.Game, existing, game["game_id"], fields)] += 1
     await db.flush()
     return counts

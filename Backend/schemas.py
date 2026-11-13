@@ -82,6 +82,21 @@ class GameStatus(StrEnum):
     POSTPONED = "postponed"
 
 
+# how far along a game is. scheduled and postponed are level, because a postponed game going back
+# to scheduled is exactly how it gets its new date
+STATUS_RANK = {GameStatus.SCHEDULED: 0, GameStatus.POSTPONED: 0, GameStatus.LIVE: 1, GameStatus.FINAL: 2}
+
+
+def can_move_status(current: str, new: str) -> bool:
+    """A game's status never moves backwards.
+
+    Several things write games (the seed script, the poller's live scoreboard, its daily schedule
+    refresh) and they're not equally fresh. A stale one must never turn a finished game back into
+    a live or scheduled one, which would wipe its score and, for a scheduled game, reopen its picks.
+    """
+    return STATUS_RANK[GameStatus(new)] >= STATUS_RANK[GameStatus(current)]
+
+
 class TeamResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
