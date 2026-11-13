@@ -18,6 +18,8 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - Grant admin: `uv run python harvest_scripts/make_admin.py <email> [--revoke]` (deliberately no endpoint).
 - `.github/workflows/nba-reachability.yml` — manual GitHub Action checking the cdn.nba.com feeds are reachable from a datacenter IP, which the production poller depends on.
 - Verify the real bucket: `uv run check_s3.py`.
+- Poller: `uv run python poller.py` (or `--once`). A separate process from the api; run exactly one.
+- `.github/workflows/capture-nba-samples.yml` saves real cdn payloads (also printed into the job log, since artifact downloads may be unreachable); `poller-smoke.yml` runs the real poller once against the live cdn on a fresh seeded database. Both manual.
 - Load NBA data: `uv run python harvest_scripts/seed.py` (reads the committed `nba_data.json`). Refresh it with `harvest_scripts/harvest.py`, which only works off-cloud.
 
 ## Architecture
@@ -38,6 +40,7 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - `harvest_scripts/seed.py` — upserts `nba_data.json`. Creates a `Player` for anyone in a box score but on no roster.
 - `scoring.py` — `score_game(db, game, force=False)` scores every pick for a final game from its stored box score and sets `Game.scored_at`. Kept out of the routers because the step 11 poller will call it too, so it raises `ScoringError`, not `HTTPException`. Skips a scored game unless forced; a forced rescore overwrites points. Admins trigger it with `POST /api/admin/games/{game_id}/score?force=`.
 - `routers/leaderboard.py` → `/api/leaderboard` (`?season=`, all time without it) and `/api/leaderboard/games/{game_id}`: public, derived per request as `SUM(points_awarded)` over scored picks, ranked with a SQL `rank()` window function so tied totals share a rank and ranks stay true across pages.
+- `poller.py` — step 11, a worker process. Each tick: daily schedule refresh, live scoreboard for games on or about to start, then box score + `scoring.score_game` for finished unscored games (oldest first). Sleeps 30s while a game is watched, up to 15 min otherwise. `fetch_*` are the only network calls (nba_api in a thread; tests replace them); `parse_*` translate the cdn's formats and are tested against real payloads in `tests/fixtures/nba/`; `apply_schedule`, `apply_live`, `ingest_box_score` write. A failed fetch is logged and retried, never fatal. `tick(db, now, state)` takes the time as an argument, so tests drive it directly.
 - `image_utils.py` — profile pictures live in S3 under `profile_pics/`. Pillow and boto3 are sync, so routes call them through `run_in_threadpool`.
 - `email_utils.py` — async SMTP (`aiosmtplib`) and the password reset email (Jinja template in `templates/email/`).
 
@@ -59,6 +62,7 @@ Picks cascade with the account (`User.picks`, delete-orphan), decided in step 6.
 - Comments are lowercase, explain why rather than what, and sit at the end of the line or just above the code.
 - Datetime columns use `UTCDateTime` (models.py). SQLite drops the timezone, and a naive datetime both serializes without an offset (a browser reads it as local time) and can't be compared with `datetime.now(UTC)`.
 - The followed team is `settings.team_tricode` ("TOR"), never hardcoded.
+- Anything that writes a game's status goes through `schemas.can_move_status`: never backwards (except scheduled <-> postponed). The seed script, the scoreboard and the schedule refresh all write games and aren't equally fresh.
 
 ## Known issues
 

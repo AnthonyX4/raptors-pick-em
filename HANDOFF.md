@@ -1,14 +1,14 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-13 after the first run of the NBA reachability check. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-13 at the end of step 11. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 8 are done: the backend is a complete Pick'em app. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; and season and per-game leaderboards.
-- 197 tests pass (`cd Backend && uv run pytest`, about three minutes).
+- Steps 1 to 8 and 11 are done: the backend is a complete Pick'em app that runs itself. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; and the poller, which keeps games, box scores and scores current from the NBA's CDN.
+- 227 tests pass (`cd Backend && uv run pytest`, about three minutes).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
-- Steps 9 to 12 are not started. Until step 11 exists, an admin scores each game by hand with `POST /api/admin/games/{game_id}/score`.
+- Steps 9, 10 and 12 are not started. The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
 
 ## Decisions already made
 
@@ -64,9 +64,11 @@ Worked out in discussion and should be followed unless there's a reason to chang
 
 **Polling before WebSockets.** Build chat and live scores on plain REST with the browser re-requesting on a timer; it is a complete, testable feature. Add WebSockets afterwards as an upgrade, keeping `POST` for sending. Once more than one backend container runs, a message posted to container A won't reach clients on container B, which is where Redis pub/sub earns its place.
 
-**One poller, not one per container** (step 11). A loop started in `main.py`'s `lifespan` runs once per container, so two containers on ECS would double-poll and race. Either run it as a separate single-task service or take a lock in Redis. Note it in the code even while running a single container.
+**The poller is a separate process** (step 11, built). Not a task in the api's lifespan, so two api containers can't mean two pollers racing. On ECS it becomes its own service with a desired count of 1; in Docker Compose, a second service from the same image with `command: python poller.py`.
 
-**The poller does three jobs, not one** (step 11). Live scores and statuses on game nights; box scores and scoring when a game goes final; and a daily schedule refresh from the CDN, which is what moves a postponed game back to scheduled (reopening its picks) and adds the NBA Cup games that only get dates in December. It also updates `Player.team_id` from each new box score, since there's no cloud-reachable roster feed.
+**The poller does three jobs** (built). A daily schedule refresh (new NBA Cup games, moved tipoffs, postponed games going back to scheduled, which reopens their picks, and final scores for any game it missed entirely); live scores for games on or about to start; box scores and scoring for finished games. It moves `Player.team_id` to the team a player last appeared for, since there's no cloud-reachable roster feed. It scores immediately when a box score says final; if the NBA later corrects a stat, an admin rescores with `?force=true`.
+
+**Statuses never move backwards** (`schemas.can_move_status`), except between scheduled and postponed. Three writers touch games (seed, scoreboard, schedule refresh) and they aren't equally fresh; without this, an old harvest re-seeded or a stale feed would turn a finished game back into a scheduled one, wipe its score and reopen its picks.
 
 ## Learned from the real data (step 3)
 
@@ -82,6 +84,16 @@ Scored the 11 finished games on a copy of the database (no picks exist yet, so t
 - **Ties are even more common than step 3 suggested.** The steals leader was tied in 5 of 11 games (once three ways), points and assists in 2 each. Ties make a category *easier* to hit, since any tied player counts.
 - **Early hit rates for "pick the usual guy"**: assists, Quickley led or tied in 6 of 11 (55%); points, Barnes in 5 (45%); rebounds, Poeltl in 4 (36%); steals, Barnes in 4 (36%). Raptors are 5-6. Steals (5 points) and rebounds (3 points) are about equally predictable so far, so steals may be overpaying. Eleven games is too few to act on; recalibrate after 30 or so.
 
+## Learned from the real CDN payloads (step 11)
+
+Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `Backend/tests/fixtures/nba/`.
+
+- **The CDN box score is not the stats.nba.com one.** It leaves inactive players out entirely (28 lines for the opener, against 33 from stats.nba.com) and marks a benched player `played: "0"` with minutes `PT00M00.00S` rather than none. Both become `minutes = None` ("didn't appear"), or a benched player with zero minutes would count as having played.
+- **The schedule shows a game in progress as 0-0.** Scores are only taken from it once a game is final; live scores come from the scoreboard.
+- Clocks and minutes are ISO durations (`PT02M30.00S`), including a three-digit-seconds `PT12M000.00S` at the start of a quarter.
+- `postponedStatus` was `"N"` on every game seen. Any other value is read as postponed, but that's unverified against a real postponement.
+- The first end-to-end run (`poller-smoke.yml`) applied the schedule, picked up TOR @ PHI live in the 4th quarter, and scored the 11 finished games, all against the live CDN.
+
 ## Open
 
 - Frontend is untouched. The sneaker store's React app was deliberately not copied.
@@ -89,9 +101,9 @@ Scored the 11 finished games on a copy of the database (no picks exist yet, so t
 
 ## Next: a choice of direction
 
-The Pick'em backend is complete. What it can't do yet is run itself: games stay "scheduled" in the database after tipoff, and every game needs an admin to score it. Options, roughly in the order recommended:
+The backend is complete and runs itself. What's left, in no fixed order:
 
-1. ~~Push to GitHub and run the NBA reachability workflow.~~ Done: the CDN works with `nba_api`'s client, so step 11 goes ahead as planned.
-2. **Step 11, the poller**, moved ahead of chat. Live scores, box scores and scoring when a game goes final, the daily schedule refresh, player team updates. This is what makes a deployed app work without someone at a laptop, so it matters more for the Docker/ECS goal than chat does.
-3. **The frontend**, now that there's a complete API to build against.
-4. **Steps 9 and 10, chat**, still with the open cascade-or-"[deleted]" decision for a deleted user's messages.
+- **Docker, Postgres, Compose, then ECS.** The original goal for this project. Three containers locally (api, poller, Postgres), then the api and poller as two ECS services, Postgres on RDS. Postgres also brings back the question of Alembic.
+- **The frontend**, now that there's a complete API to build against.
+- **Steps 9 and 10, chat**, still with the open cascade-or-"[deleted]" decision for a deleted user's messages.
+- **Step 12, reminder emails**, which would ride on the poller's loop.

@@ -19,7 +19,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 8 | Leaderboard | Done |
 | 9 | Game chat messages | |
 | 10 | Reactions and moderation | |
-| 11 | Game-night score polling | |
+| 11 | Game-night score polling | Done (built before 9 and 10) |
 | 12 | Reminder emails | |
 
 Later: Docker, Postgres, Docker Compose, AWS ECS, WebSockets.
@@ -36,7 +36,14 @@ uv run fastapi dev main.py                 # http://localhost:8000, docs at /doc
 uv run pytest                              # needs no .env, S3 and email are faked
 ```
 
-To refresh the season's data (scores, rosters, new box scores), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
+To keep the database in step with real games (live scores, box scores and scoring when a game ends, the daily schedule refresh), run the poller in a second terminal. Run exactly one:
+
+```
+uv run python poller.py           # until Ctrl+C
+uv run python poller.py --once    # a single pass
+```
+
+To refresh the season's data from scratch (rosters included), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
 
 ```
 uv run python harvest_scripts/harvest.py   # must run on a normal machine, nba.com blocks cloud IPs
