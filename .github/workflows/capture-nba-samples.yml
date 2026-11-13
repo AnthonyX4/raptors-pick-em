@@ -47,6 +47,25 @@ jobs:
           save("schedule", response.json())
           PY
 
+      # the same samples, compressed into the job log: some environments (this project's own dev
+      # sandbox included) can read job logs but not artifact downloads, which come from blob storage.
+      # the schedule is cut down to the followed team's games to keep it small
+      - name: Print the samples into the log
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          with open("samples/schedule.json") as f:
+              schedule = json.load(f)
+          for day in schedule["leagueSchedule"]["gameDates"]:
+              day["games"] = [g for g in day["games"] if "TOR" in (g["homeTeam"]["teamTricode"], g["awayTeam"]["teamTricode"])]
+          schedule["leagueSchedule"]["gameDates"] = [d for d in schedule["leagueSchedule"]["gameDates"] if d["games"]]
+          with open("samples/schedule_tor.json", "w") as f:
+              json.dump(schedule, f)
+          PY
+          tar czf samples.tgz -C samples scoreboard.json boxscore.json schedule_tor.json
+          echo "SAMPLES-BEGIN"; base64 -w 1000 samples.tgz; echo "SAMPLES-END"
+
       - uses: actions/upload-artifact@v4
         with:
           name: nba-samples
