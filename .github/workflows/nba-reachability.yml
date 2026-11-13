@@ -1,7 +1,10 @@
 # Checks whether the NBA feeds the production poller (step 11) depends on can be reached from a
-# datacenter ip. stats.nba.com is known to drop connections from cloud providers, which is why the
-# harvest script only runs on a laptop; cdn.nba.com is reported to serve them normally. This turns
-# that report into evidence before anything is built on top of it.
+# datacenter ip. stats.nba.com drops connections from cloud providers, which is why the harvest
+# script only runs on a laptop.
+#
+# First result (2026-11-13): cdn.nba.com refuses curl with a 403 "Access Denied" page, but serves
+# nba_api's live endpoints normally from the same runner. Its bot protection keys on the client,
+# not the ip, so the poller must fetch through nba_api (or with its headers), never a bare client.
 #
 # GitHub's runners sit on Microsoft Azure, so a pass here is strong evidence, not proof, for AWS.
 # Run it from the Actions tab (it never runs on push: no reason to hit the NBA on every commit).
@@ -30,7 +33,7 @@ jobs:
             if [ "$3" = yes ] && [ "$code" != 200 ]; then failed=1; fi
           }
 
-          echo "--- cdn.nba.com: what the poller will use, these must pass"
+          echo "--- cdn.nba.com with curl: informational, refused for looking like a bot (see the top of this file)"
           probe "live scoreboard     " https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json yes
           probe "box score (opener)  " https://cdn.nba.com/static/json/liveData/boxscore/boxscore_0022600088.json yes
           probe "season schedule     " https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json yes

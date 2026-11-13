@@ -1,12 +1,12 @@
 # Handoff
 
-Written 2026-11-12, updated at the end of step 8. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-13 after the first run of the NBA reachability check. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
 - Steps 1 to 8 are done: the backend is a complete Pick'em app. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; and season and per-game leaderboards.
 - 197 tests pass (`cd Backend && uv run pytest`, about three minutes).
-- Commits on `main`, local only. No remote is configured yet.
+- On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
 - Steps 9 to 12 are not started. Until step 11 exists, an admin scores each game by hand with `POST /api/admin/games/{game_id}/score`.
 
@@ -18,7 +18,7 @@ Written 2026-11-12, updated at the end of step 8. Read this with `README.md` (th
 
 **`harvest.py` is for development and the first load only.** It uses stats.nba.com, so it runs on a laptop, and a laptop can't (and shouldn't be able to) write to a production database inside AWS. Once deployed, every update has to come from a source reachable from AWS: the step 11 poller, reading `cdn.nba.com`. The CDN has a cloud-friendly equivalent for everything except rosters: live scoreboard, per-game box scores, and the season schedule (`cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json`). Rosters are covered by updating a player's team from the box score of the last game they played.
 
-**That the CDN works from AWS is reported, not yet verified.** `.github/workflows/nba-reachability.yml` (step 4.5) fetches the three CDN feeds from a GitHub runner (Azure, a datacenter IP) and fails if any is blocked. Run it once the repo is on GitHub, before building step 11. If it fails, the fallback is a small feeder running at home that fetches from the NBA and posts results to an admin-only ingest endpoint.
+**The CDN works from a datacenter IP, but only for a browser-like client.** Checked 2026-11-13 by `.github/workflows/nba-reachability.yml` (step 4.5) on a GitHub runner (Azure). From the same runner, `curl` got a 403 Akamai "Access Denied" page for all three feeds, while `nba_api`'s live endpoints got 200 for all three. So the protection keys on the client, not the IP. Consequences for step 11: fetch through `nba_api` (or `NBALiveHTTP.headers` for the schedule, which it doesn't wrap), never a bare HTTP client. And Akamai rules can change without notice: the poller should log refusals loudly, and the workflow is worth re-running if it ever starts failing. Azure isn't AWS, so this is strong evidence rather than proof for ECS. If AWS turns out to be refused, the fallback is a small feeder at home that fetches from the NBA and posts results to an admin-only ingest endpoint.
 
 **No soft delete.** Removed deliberately in commit `c9a578b`; deleting a user removes the row. For picks this is settled: they cascade with the account (`User.picks`, delete-orphan). For chat messages (step 9) it is still open: cascade them too, or make the author nullable and show "[deleted]". Do not reintroduce `deleted_at` by reflex.
 
@@ -84,7 +84,6 @@ Scored the 11 finished games on a copy of the database (no picks exist yet, so t
 
 ## Open
 
-- No GitHub remote yet. Commits are local; `git remote add origin ...` and push whenever. Then run the NBA reachability workflow once from the Actions tab.
 - Frontend is untouched. The sneaker store's React app was deliberately not copied.
 - Not decided: whether private friend leagues (step 5-8 era) are worth building, and whether reactions (step 10) are needed at all.
 
@@ -92,7 +91,7 @@ Scored the 11 finished games on a copy of the database (no picks exist yet, so t
 
 The Pick'em backend is complete. What it can't do yet is run itself: games stay "scheduled" in the database after tipoff, and every game needs an admin to score it. Options, roughly in the order recommended:
 
-1. **Push to GitHub and run the NBA reachability workflow.** Five minutes, and it decides whether step 11 works as planned or needs the home-feeder fallback.
+1. ~~Push to GitHub and run the NBA reachability workflow.~~ Done: the CDN works with `nba_api`'s client, so step 11 goes ahead as planned.
 2. **Step 11, the poller**, moved ahead of chat. Live scores, box scores and scoring when a game goes final, the daily schedule refresh, player team updates. This is what makes a deployed app work without someone at a laptop, so it matters more for the Docker/ECS goal than chat does.
 3. **The frontend**, now that there's a complete API to build against.
 4. **Steps 9 and 10, chat**, still with the open cascade-or-"[deleted]" decision for a deleted user's messages.
