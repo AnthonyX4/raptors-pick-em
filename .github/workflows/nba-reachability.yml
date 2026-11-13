@@ -26,6 +26,7 @@ jobs:
               -H "User-Agent: $UA" -H 'Referer: https://www.nba.com/' -H 'Accept: application/json' "$2" 2>err.txt) || code="failed: $(head -c 100 err.txt)"
             size=$(wc -c < body.json 2>/dev/null || echo 0)
             echo "$1 -> $code ($size bytes)"
+            if [ "$code" = 403 ]; then echo "    refusal page: $(tr -s '[:space:]' ' ' < body.json | head -c 300)"; fi
             if [ "$3" = yes ] && [ "$code" != 200 ]; then failed=1; fi
           }
 
@@ -37,8 +38,50 @@ jobs:
           echo "--- stats.nba.com: what harvest.py uses, expected to be blocked here"
           probe "stats scoreboard    " "https://stats.nba.com/stats/scoreboardv3?GameDate=2026-11-12&LeagueID=00" no
 
-          if [ $failed = 1 ]; then
-            echo "::error::A cdn.nba.com feed is unreachable from a datacenter ip. The step 11 poller plan needs the home-feeder fallback (see HANDOFF.md)."
-            exit 1
-          fi
-          echo "All cdn.nba.com feeds reachable ✅"
+          # not fatal here: the python step below decides. curl can be refused for looking like a bot
+          # even where a browser-like client gets through, and only the poller's own client matters
+          echo "curl_failed=$failed" >> "$GITHUB_ENV"
+
+      # the client the step 11 poller will actually use: nba_api's live endpoints (python requests,
+      # browser headers). if this passes where curl failed, the block is about the client, not the ip
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Fetch the feeds with nba_api, as the poller would
+        shell: bash
+        run: |
+          pip install --quiet nba_api
+          python - <<'EOF'
+          import sys
+          import requests
+          from nba_api.live.nba.endpoints import boxscore, scoreboard
+
+          failures = 0
+          for label, call in [
+              ("live scoreboard", lambda: scoreboard.ScoreBoard(timeout=20)),
+              ("box score (opener)", lambda: boxscore.BoxScore("0022600088", timeout=20)),
+          ]:
+              try:
+                  data = call().get_dict()
+                  print(f"{label:<20} -> ok, keys: {list(data)[:3]}")
+              except Exception as err:
+                  failures += 1
+                  print(f"{label:<20} -> FAILED: {type(err).__name__}: {str(err)[:200]}")
+
+          # the schedule isn't wrapped by nba_api's live endpoints, so the same headers by hand
+          from nba_api.live.nba.library.http import NBALiveHTTP
+          response = requests.get(
+              "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json",
+              headers=NBALiveHTTP.headers, timeout=20,
+          )
+          print(f"{'season schedule':<20} -> {response.status_code}")
+          if response.status_code != 200:
+              failures += 1
+              print("    refusal page:", " ".join(response.text.split())[:300])
+
+          if failures:
+              print("::error::cdn.nba.com refused the poller's own client from a datacenter ip. The step 11 plan needs the home-feeder fallback (see HANDOFF.md).")
+              sys.exit(1)
+          print("All cdn.nba.com feeds reachable with the poller's client ✅")
+          EOF
