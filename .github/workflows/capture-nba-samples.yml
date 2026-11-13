@@ -1,0 +1,54 @@
+# Saves one real copy of each cdn.nba.com feed the poller reads, as a downloadable artifact.
+# Nothing in development can reach the cdn (nba.com refuses this project's sandboxes), so these
+# samples are how the poller's parsing gets written and tested against the real shapes. Run it
+# from the Actions tab whenever the poller's tests need fresh samples, e.g. during a live game.
+name: Capture NBA samples
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        description: "A finished game whose box score to save"
+        default: "0022600088"
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Fetch through nba_api, as the poller does
+        shell: bash
+        env:
+          GAME_ID: ${{ inputs.game_id }}
+        run: |
+          pip install --quiet nba_api
+          mkdir samples
+          python - <<'PY'
+          import json, os
+          import requests
+          from nba_api.live.nba.endpoints import boxscore, scoreboard
+          from nba_api.live.nba.library.http import NBALiveHTTP
+
+          def save(name, data):
+              with open(f"samples/{name}.json", "w") as f:
+                  json.dump(data, f, indent=1)
+              print(f"saved {name}.json")
+
+          save("scoreboard", scoreboard.ScoreBoard(timeout=20).get_dict())
+          save("boxscore", boxscore.BoxScore(os.environ["GAME_ID"], timeout=20).get_dict())
+          response = requests.get(
+              "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json",
+              headers=NBALiveHTTP.headers, timeout=30,
+          )
+          response.raise_for_status()
+          save("schedule", response.json())
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nba-samples
+          path: samples/
+          retention-days: 7
