@@ -22,6 +22,9 @@ from schemas import (
     PickCategoryCreate, PickCategoryResponse, PickCategoryUpdate,
 )
 from routers.pick_categories import category_key
+from routers.games import TEAM_LOADERS
+from schemas import GameScoreResponse
+import scoring
 
 # the dependency on the router itself protects every route below, a new route can't forget the admin check
 router = APIRouter(dependencies=[Depends(get_current_admin)])
@@ -154,3 +157,24 @@ async def update_pick_category(
     await db.refresh(category)
 
     return category
+
+
+# POST, score every pick for a final game from its stored box score
+# skipped if the game is already scored, pass ?force=true to rescore after the nba corrects a stat.
+# the step 11 poller calls the same scoring.score_game when a game goes final, this stays as the manual re-run
+@router.post(
+    "/games/{game_id}/score",
+    response_model=GameScoreResponse,
+)
+async def score_game(game_id: str, db: Annotated[AsyncSession, Depends(get_db)], force: bool = False):
+
+    result = await db.execute(select(models.Game).options(*TEAM_LOADERS).where(models.Game.game_id == game_id))
+    game = result.scalars().first()
+
+    if not game:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Game not found")
+
+    try:
+        return await scoring.score_game(db, game, force=force)
+    except scoring.ScoringError as err:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err)) from err

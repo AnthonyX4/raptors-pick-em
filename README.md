@@ -15,8 +15,8 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 4.5 | Check the NBA's CDN is reachable from a datacenter IP | Done: run the workflow once the repo is on GitHub |
 | 5 | Pick categories | Done |
 | 6 | Picks (locked at tipoff) | Done |
-| 7 | Results and scoring | Next |
-| 8 | Leaderboard | |
+| 7 | Results and scoring | Done |
+| 8 | Leaderboard | Done |
 | 9 | Game chat messages | |
 | 10 | Reactions and moderation | |
 | 11 | Game-night score polling | |

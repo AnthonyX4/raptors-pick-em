@@ -1,14 +1,14 @@
 # Handoff
 
-Written 2026-11-12, updated at the end of step 6. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated at the end of step 8. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 6 are done: accounts and auth; the real 2026-27 Raptors season at `/api/games` and `/api/players`; pick categories; and picks, which can be made, edited and withdrawn until tipoff and are revealed once a game starts.
-- 164 tests pass (`cd Backend && uv run pytest`).
+- Steps 1 to 8 are done: the backend is a complete Pick'em app. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; and season and per-game leaderboards.
+- 197 tests pass (`cd Backend && uv run pytest`, about three minutes).
 - Commits on `main`, local only. No remote is configured yet.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
-- Steps 7 to 12 are not started. Picks are never scored yet: `points_awarded` stays `None` until step 7.
+- Steps 9 to 12 are not started. Until step 11 exists, an admin scores each game by hand with `POST /api/admin/games/{game_id}/score`.
 
 ## Decisions already made
 
@@ -31,6 +31,14 @@ Written 2026-11-12, updated at the end of step 6. Read this with `README.md` (th
 - Someone else's pick is a 404, not a 403: picks are secret until tipoff, so the response shouldn't confirm one exists.
 - Categories are never deleted, only deactivated: existing picks still need their category to be scored. Their kind and stat can't be edited, for the same reason.
 - `utcnow()` in `routers/picks.py` is the router's only clock read, so tests move time instead of waiting.
+
+**Scoring rules (step 7), chosen by Anthony.** Margin of victory pays by closeness, in thirds of the category's points rounded down: exact = all, off by 1-5 = two thirds, off by 6-10 = one third, more = nothing (3 / 2 / 1 / 0 at the default weight; the tiers scale if reweighted). A margin pick only counts if the same user's winner pick was right: it reads as "TOR by 8".
+
+**Scoring rules that follow from those.**
+- Stat leaders are found among Raptors who appeared, by the team on the box score line. Every tied leader counts as correct. A player who didn't play leads nothing. If nobody recorded a stat (no Raptor had a steal), nobody leads it and those picks score 0.
+- Picks in a category deactivated after they were made are still scored.
+- Points are written onto each pick, never added. A forced rescore uses the categories' current weights; reweighting without rescoring leaves past results alone.
+- The leaderboard counts scored picks only (`points_awarded` not null), so an unscored game shows nothing and can't leak picks. A user whose scored picks all earned 0 still appears, with 0.
 
 **`sqlite_autoincrement` on `User`.** A token carries only `{"sub": "<user_id>"}` and stays valid until it expires, so a reused id would let a deleted user's token authenticate as a new account. SQLite reuses the largest freed id without `AUTOINCREMENT`. Postgres sequences already behave correctly, so this is a SQLite-stage fix; `tests/test_tokens.py` is what keeps it true after the migration.
 
@@ -67,18 +75,24 @@ Worked out in discussion and should be followed unless there's a reason to chang
 - **`Player.team_id` is a snapshot** from harvest time. A trade only shows after a re-harvest. Box score lines record the team the player actually played for, so history stays right.
 - **`nba_api` pulls in pandas and numpy.** Fine for the harvest scripts, but it bloats the API's Docker image for code the API never runs. When containerizing, consider moving `nba-api` to a separate dependency group for the scripts, with only the step 11 poller needing it at runtime.
 
+## Learned from scoring the real season (step 7)
+
+Scored the 11 finished games on a copy of the database (no picks exist yet, so this checks the leaders, not points):
+
+- **Ties are even more common than step 3 suggested.** The steals leader was tied in 5 of 11 games (once three ways), points and assists in 2 each. Ties make a category *easier* to hit, since any tied player counts.
+- **Early hit rates for "pick the usual guy"**: assists, Quickley led or tied in 6 of 11 (55%); points, Barnes in 5 (45%); rebounds, Poeltl in 4 (36%); steals, Barnes in 4 (36%). Raptors are 5-6. Steals (5 points) and rebounds (3 points) are about equally predictable so far, so steals may be overpaying. Eleven games is too few to act on; recalibrate after 30 or so.
+
 ## Open
 
 - No GitHub remote yet. Commits are local; `git remote add origin ...` and push whenever. Then run the NBA reachability workflow once from the Actions tab.
 - Frontend is untouched. The sneaker store's React app was deliberately not copied.
 - Not decided: whether private friend leagues (step 5-8 era) are worth building, and whether reactions (step 10) are needed at all.
 
-## Next: steps 7 and 8
+## Next: a choice of direction
 
-Scoring (step 7) and the leaderboard (step 8), as one batch. After this the backend is a complete Pick'em app.
+The Pick'em backend is complete. What it can't do yet is run itself: games stay "scheduled" in the database after tipoff, and every game needs an admin to score it. Options, roughly in the order recommended:
 
-- An admin endpoint, `POST /api/admin/games/{game_id}/score`, that scores every pick for a final game from its stored box score and sets `scored_at`. Skips an already-scored game unless forced, so re-running never doubles points.
-- Winner: correct team gets the category's points. Stat leaders: correct if the picked player is among the tied leaders for that stat among Raptors players (ties are common, see above). Margin: partial credit by closeness; the exact curve is a decision to settle with Anthony.
-- A player who didn't play (DNP) can't lead anything; a pick of them simply scores zero.
-- Leaderboard: `SUM(points_awarded)` per user, season-wide and per game, paginated, derived per request.
-- The 11 finished games already have box scores in the database, so scoring can be tested on real data immediately.
+1. **Push to GitHub and run the NBA reachability workflow.** Five minutes, and it decides whether step 11 works as planned or needs the home-feeder fallback.
+2. **Step 11, the poller**, moved ahead of chat. Live scores, box scores and scoring when a game goes final, the daily schedule refresh, player team updates. This is what makes a deployed app work without someone at a laptop, so it matters more for the Docker/ECS goal than chat does.
+3. **The frontend**, now that there's a complete API to build against.
+4. **Steps 9 and 10, chat**, still with the open cascade-or-"[deleted]" decision for a deleted user's messages.

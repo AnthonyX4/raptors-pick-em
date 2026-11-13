@@ -249,3 +249,29 @@ class PaginatedPicksResponse(PaginatedResponse):
 
 class PaginatedGamePicksResponse(PaginatedResponse):
     picks: list[PickWithUser]
+
+
+
+# --- Scoring and leaderboard ---------------------------------------------------
+
+class GameScoreResponse(BaseModel):
+    game_id: str
+    scored: bool # False when the game was already scored and force wasn't passed: nothing changed
+    scored_at: datetime
+    winner: str # tricode of the team that won
+    margin: int # the winning margin in points
+    leaders: dict[str, list[str]] # stat leader category key -> the Raptors tied for the lead, empty if nobody recorded one
+    picks_scored: int # how many picks were (re)scored, 0 when skipped
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int # tied totals share a rank: 1, 2, 2, 4
+    user: UserPublic
+    total_points: int
+    picks_scored: int
+    correct_picks: int # picks that earned any points, partial margin credit included
+    games_played: int
+
+
+class LeaderboardResponse(PaginatedResponse):
+    entries: list[LeaderboardEntry]
