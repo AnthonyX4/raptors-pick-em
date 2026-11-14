@@ -25,6 +25,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/users/token") # token url mus
                                                                  # purpose is to extract the token from the authorization header
                                                                  # note that tokenUrl is purely for docs
 
+# the same scheme, but a request without a token gets None instead of a 401: for public pages that
+# show a little more to someone logged in (a chat room marking which messages you liked)
+optional_oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/users/token", auto_error=False)
+
 def hash_password(password: str) -> str:
     return password_hash.hash(password)
 
@@ -109,6 +113,20 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[models.User, Depends(get_current_user)]
+
+
+async def get_optional_user(
+    token: Annotated[str | None, Depends(optional_oauth2_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> models.User | None:
+    """None when no token was sent. A token that was sent but is invalid or expired is still a 401,
+    so a client holding a stale token finds out instead of silently being treated as logged out."""
+    if token is None:
+        return None
+    return await get_current_user(token, db)
+
+
+OptionalUser = Annotated[models.User | None, Depends(get_optional_user)]
 
 
 # builds on get_current_user, so an admin still needs a valid, unexpired token for a non-deleted user

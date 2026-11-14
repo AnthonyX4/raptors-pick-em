@@ -1,7 +1,9 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Annotated
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
 # Pagination
 class PaginatedResponse(BaseModel):
@@ -290,3 +292,58 @@ class LeaderboardEntry(BaseModel):
 
 class LeaderboardResponse(PaginatedResponse):
     entries: list[LeaderboardEntry]
+
+
+
+# --- Chat -------------------------------------------------------------------
+
+# whitespace is stripped before the length check, so "   " is refused as empty rather than posted.
+# 500 is settings.message_max_length; a literal here because schemas can't import config without a cycle
+MessageBody = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
+class ChatMessageCreate(BaseModel):
+    body: MessageBody
+
+
+class ChatMessageUpdate(BaseModel):
+    body: MessageBody
+
+
+class ChatMessageResponse(BaseModel):
+    message_id: int
+    game_id: str
+    author: UserPublic | None # None when the author deleted their account: the frontend shows "[deleted]"
+    body: str
+    created_at: datetime
+    edited_at: datetime | None
+    like_count: int
+    liked_by_me: bool # always False for a reader who isn't logged in
+
+
+class ChatMessagePage(BaseModel):
+    # cursor pagination, deliberately not the skip/limit shape every other list uses: in a live room new
+    # messages shift every offset, so page 2 by offset would repeat rows. paging by message id doesn't
+    messages: list[ChatMessageResponse] # oldest first, the order a chat is read in
+    has_older: bool # ask again with ?before=<first message_id> to scroll back
+    has_newer: bool # ask again with ?after=<last message_id>; polling does this every few seconds
+    room_open: bool # whether posting is allowed right now, so the frontend knows to show the input box
+    opens_at: datetime
+    closes_at: datetime | None # None until the game has gone final
+
+
+class MuteCreate(BaseModel):
+    hours: int = Field(ge=1, le=24 * 30) # settings.mute_max_hours, a literal for the same reason as above
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class MuteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    user: UserPublic
+    muted_until: datetime
+    reason: str | None
+
+
+class PaginatedMutesResponse(PaginatedResponse):
+    mutes: list[MuteResponse]

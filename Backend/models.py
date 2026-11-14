@@ -136,6 +136,12 @@ class Game(Base):
     # set when step 7 scores the picks for this game, so re-running scoring can skip a game it already did
     scored_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
 
+    # when the poller saw the game go final on the live scoreboard. the game's chat room closes a few
+    # hours after this. stays None for a game that was already over when it arrived (seeded, or caught
+    # up by the schedule refresh), whose room is simply closed. not scored_at: an admin's forced
+    # rescore moves that, and must not reopen a room
+    final_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
+
     # two foreign keys point at the same table, so each relationship has to say which one it follows
     home_team: Mapped["Team"] = relationship(foreign_keys=[home_team_id])
     away_team: Mapped["Team"] = relationship(foreign_keys=[away_team_id])
@@ -232,3 +238,52 @@ class Pick(Base):
     category: Mapped["PickCategory"] = relationship()
     team: Mapped["Team | None"] = relationship()
     player: Mapped["Player | None"] = relationship()
+
+
+
+# --- Chat -------------------------------------------------------------------
+
+class Message(Base):
+    # one post in a game's chat room
+    __tablename__ = "messages"
+    # AUTOINCREMENT matters here for a second reason beyond tokens: the chat pages by message id
+    # (?before= / ?after=), which only works if ids only ever grow. without it, deleting the newest
+    # message hands its id to the next one, and a client polling ?after= would miss or misorder it
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    message_id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    game_id: Mapped[str] = mapped_column(ForeignKey("games.game_id"), nullable=False, index=True)
+    # None once the author deletes their account (decided: messages stay, shown as "[deleted]",
+    # so a conversation still makes sense). set in delete_user_account
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.user_id"), default=None, index=True)
+    body: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+    edited_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None) # shown as "edited"
+
+    author: Mapped["User | None"] = relationship()
+    likes: Mapped[list["MessageLike"]] = relationship(back_populates="message", cascade="all, delete-orphan")
+
+
+class MessageLike(Base):
+    # the composite key is the "one like per user per message" rule, enforced by the database itself
+    __tablename__ = "message_likes"
+
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.message_id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+
+    message: Mapped["Message"] = relationship(back_populates="likes")
+
+
+class Mute(Base):
+    # an admin's ban on posting, until a time (decided: timed, the admin picks how long). one row per
+    # user, a new mute replaces the old one. a separate table rather than a column on users, so
+    # moderation history doesn't widen every user row, and adding it didn't mean rebuilding that table
+    __tablename__ = "mutes"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.user_id"), primary_key=True)
+    muted_until: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(200), default=None)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=lambda: datetime.now(UTC))
+
+    user: Mapped["User"] = relationship()

@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from routers import admins, games, leaderboard, pick_categories, picks, players, users
+from routers import admins, games, leaderboard, messages, pick_categories, picks, players, users
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -58,6 +58,7 @@ app.include_router(players.router, prefix="/api/players", tags=["players"])
 app.include_router(pick_categories.router, prefix="/api/pick-categories", tags=["picks"])
 app.include_router(picks.router, prefix="/api/picks", tags=["picks"])
 app.include_router(leaderboard.router, prefix="/api/leaderboard", tags=["leaderboard"])
+app.include_router(messages.router, prefix="/api", tags=["chat"])
 app.include_router(admins.router, prefix="/api/admin", tags=["admin"])
 
 # GET, a quick "is the api up" check. kept deliberately cheap: it touches no database and is what a

@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project overview
 
-Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chatroom. Backend only so far. `HANDOFF.md` has the decisions made so far and the design agreed for steps not yet built.
+Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chat room. Backend only so far. `HANDOFF.md` has the decisions made so far and the design agreed for steps not yet built.
 
 - `Backend/` — FastAPI + SQLAlchemy 2.x (async, `aiosqlite` driver), managed with `uv`, Python >=3.14.
 - Built step by step, the plan and current state are the table in `README.md`. Keep that table up to date when a step is finished.
@@ -27,11 +27,11 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - `main.py` — app entrypoint. Creates tables and the default pick categories in the `lifespan` startup with `Base.metadata.create_all` (**no Alembic**: changing a model means deleting `raptors.db`). CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a cheap health message that touches no database, for container health checks.
 - `config.py` — `Settings` (pydantic-settings) read from `.env`. `app_name` is the display name used in the docs and emails.
 - `database.py` — async engine on `raptors.db` (anchored to `Backend/`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency.
-- `models.py` — `User`, `PasswordResetToken`, `PickCategory`, `Pick`, and the NBA data: `Team`, `Player`, `Game`, `PlayerGameStat` (`Mapped`/`mapped_column` style). NBA rows use the NBA's own ids as primary keys, which is what makes re-seeding an update rather than a duplicate. Every datetime column is `UTCDateTime`, never a plain `DateTime`.
+- `models.py` — `User`, `PasswordResetToken`, `PickCategory`, `Pick`, `Message`, `MessageLike`, `Mute`, and the NBA data: `Team`, `Player`, `Game`, `PlayerGameStat` (`Mapped`/`mapped_column` style). NBA rows use the NBA's own ids as primary keys, which is what makes re-seeding an update rather than a duplicate. Every datetime column is `UTCDateTime`, never a plain `DateTime`.
 - `schemas.py` — Pydantic v2 models with `ConfigDict(from_attributes=True)`. Paginated lists subclass `PaginatedResponse`.
-- `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. A deleted user's still-unexpired token stops working at the next request, because the user is looked up every time.
+- `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. A deleted user's still-unexpired token stops working at the next request, because the user is looked up every time. `OptionalUser` is the same check for public pages that show more to a logged-in reader: None without a token, still a 401 with an invalid one.
 - `routers/users.py` → `/api/users`: register, `POST /token` login (OAuth2 form, `username` = email), `GET /me`, `PATCH /me/password`, get/patch/delete by id (path id must match the token's user), profile picture upload/delete, forgot/reset password.
-- `routers/admins.py` → `/api/admin`: router-level admin dependency. List users, get one, delete one (refuses admins).
+- `routers/admins.py` → `/api/admin`: router-level admin dependency. List users, get one, delete one (refuses admins). Moderation: delete any message, `PUT`/`DELETE /users/{id}/mute` (timed, refuses admins), `GET /mutes` (active ones).
 - `routers/games.py` → `/api/games`: public. Paginated list, oldest first, filtered by `?season=`, `?status=`, `?opponent=` (a tricode, 400 if unknown). Detail includes the box score, highest scorer first.
 - `routers/players.py` → `/api/players`: public. Paginated list by name, filtered by `?team=` and `?search=`, and get by id.
 - `routers/pick_categories.py` → `/api/pick-categories`: public list of active categories in form order. Also holds `DEFAULT_CATEGORIES` and `ensure_default_categories`, which `main.py`'s lifespan runs at startup (insert-only, never overwrites an admin's edits). Admins manage categories through `/api/admin/pick-categories` (list all, create, patch; no delete, only deactivate).
@@ -41,6 +41,7 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - `scoring.py` — `score_game(db, game, force=False)` scores every pick for a final game from its stored box score and sets `Game.scored_at`. Kept out of the routers because the step 11 poller will call it too, so it raises `ScoringError`, not `HTTPException`. Skips a scored game unless forced; a forced rescore overwrites points. Admins trigger it with `POST /api/admin/games/{game_id}/score?force=`.
 - `routers/leaderboard.py` → `/api/leaderboard` (`?season=`, all time without it) and `/api/leaderboard/games/{game_id}`: public, derived per request as `SUM(points_awarded)` over scored picks, ranked with a SQL `rank()` window function so tied totals share a rank and ranks stay true across pages.
 - `poller.py` — step 11, a worker process. Each tick: daily schedule refresh, live scoreboard for games on or about to start, then box score + `scoring.score_game` for finished unscored games (oldest first). Sleeps 30s while a game is watched, up to 15 min otherwise. `fetch_*` are the only network calls (nba_api in a thread; tests replace them); `parse_*` translate the cdn's formats and are tested against real payloads in `tests/fixtures/nba/`; `apply_schedule`, `apply_live`, `ingest_box_score` write. A failed fetch is logged and retried, never fatal. `tick(db, now, state)` takes the time as an argument, so tests drive it directly.
+- `routers/messages.py` → mounted at `/api`: `GET`/`POST /games/{game_id}/messages` (read is public; post needs the room open and the user not muted), `PATCH`/`DELETE /messages/{id}` (author only; edit within 5 minutes and not muted, delete any time), `PUT`/`DELETE /messages/{id}/like` (idempotent). Chat pages by cursor (`?before=`/`?after=` message id, oldest first, `has_older`/`has_newer`), deliberately not skip/limit. A room is open from 24h before tipoff until 3h after `Game.final_at`; postponed, or final with no `final_at`, is closed. Rules live in `config.py` (`chat_*`, `message_*`). Tests move time by monkeypatching `routers.messages.utcnow`, which mutes use too.
 - `image_utils.py` — profile pictures live in S3 under `profile_pics/`. Pillow and boto3 are sync, so routes call them through `run_in_threadpool`.
 - `email_utils.py` — async SMTP (`aiosmtplib`) and the password reset email (Jinja template in `templates/email/`).
 
@@ -48,7 +49,7 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 
 `delete_user_account` in `routers/users.py` removes the row outright. There is no soft delete: it was removed on purpose to keep the code simple, so a deleted user's row is gone and their token stops working at the next request (`get_current_user` looks the user up every time).
 
-Picks cascade with the account (`User.picks`, delete-orphan), decided in step 6. Chat messages (step 9) are still open: cascade them too, or make the author column nullable and render a missing author as "[deleted]". Don't reintroduce `deleted_at` by reflex.
+What goes with the account: picks (cascade, `User.picks`), likes and any mute. What stays: chat messages, with `user_id` set to None, which the API returns as `author: null` and the frontend shows as "[deleted]", so conversations still read. All done in `delete_user_account`. Don't reintroduce `deleted_at` by reflex.
 
 ## Conventions
 
@@ -62,6 +63,7 @@ Picks cascade with the account (`User.picks`, delete-orphan), decided in step 6.
 - Comments are lowercase, explain why rather than what, and sit at the end of the line or just above the code.
 - Datetime columns use `UTCDateTime` (models.py). SQLite drops the timezone, and a naive datetime both serializes without an offset (a browser reads it as local time) and can't be compared with `datetime.now(UTC)`.
 - The followed team is `settings.team_tricode` ("TOR"), never hardcoded.
+- The chat's schemas are `ChatMessage*`: `MessageResponse` is the generic `{"message": ...}` reply used by the health check and password reset.
 - Anything that writes a game's status goes through `schemas.can_move_status`: never backwards (except scheduled <-> postponed). The seed script, the scoreboard and the schedule refresh all write games and aren't equally fresh.
 
 ## Known issues

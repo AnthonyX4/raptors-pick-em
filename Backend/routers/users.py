@@ -13,7 +13,7 @@ from image_utils import delete_profile_image, process_profile_image, upload_prof
 
 from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy import delete as sql_delete # bulk DELETE statement, aliased so it isn't confused with db.delete(obj)
 import models
 
@@ -336,6 +336,12 @@ async def delete_user(user: OwnedUser, db: Annotated[AsyncSession, Depends(get_d
 async def delete_user_account(user: models.User, db: AsyncSession) -> None:
     old_filename = user.image_file
 
+    # chat (decided): their messages stay, authorless, so a conversation still reads; the frontend shows
+    # "[deleted]". their likes and any mute go, they were about this user rather than the conversation.
+    # picks need nothing here, User.picks cascades
+    await db.execute(update(models.Message).where(models.Message.user_id == user.user_id).values(user_id=None))
+    await db.execute(sql_delete(models.MessageLike).where(models.MessageLike.user_id == user.user_id))
+    await db.execute(sql_delete(models.Mute).where(models.Mute.user_id == user.user_id))
     await db.delete(user) # awaited because the cascade may need to load reset_tokens before deleting them
     await db.commit()
 

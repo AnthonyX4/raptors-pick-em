@@ -192,7 +192,7 @@ def parse_schedule(payload: dict, tricode: str) -> list[dict]:
 
 # --- applying: our fields into the database ---
 
-async def apply_live(db: AsyncSession, updates: dict[str, dict]) -> list[str]:
+async def apply_live(db: AsyncSession, updates: dict[str, dict], now: datetime) -> list[str]:
     """Copy the scoreboard into our games it covers. Returns the ids of games it changed."""
     if not updates:
         return []
@@ -204,6 +204,8 @@ async def apply_live(db: AsyncSession, updates: dict[str, dict]) -> list[str]:
             continue # a finished game is settled, and a stale feed mustn't reopen anything
         for field, value in update.items():
             setattr(game, field, value)
+        if update["status"] == GameStatus.FINAL:
+            game.final_at = now # seen going final live, so its chat room closes a few hours from now
         changed.append(game.game_id)
     await db.commit()
     return changed
@@ -236,7 +238,8 @@ async def apply_schedule(db: AsyncSession, games: list[dict]) -> dict[str, int]:
             game.status = fields["status"]
             game.status_text = fields["status_text"]
             if fields["status"] == GameStatus.FINAL:
-                # the backstop for a game the poller missed entirely: final scores arrive this way
+                # the backstop for a game the poller missed entirely: final scores arrive this way.
+                # final_at stays None, so its chat room is closed: it may have ended days ago
                 game.home_score, game.away_score = fields["home_score"], fields["away_score"]
                 game.period = game.game_clock = None
         elif game.status in (GameStatus.SCHEDULED, GameStatus.POSTPONED):
@@ -344,7 +347,7 @@ async def tick(db: AsyncSession, now: datetime, state: PollerState) -> int:
     if any(watched(game, now) for game in games):
         payload = await fetch("scoreboard", fetch_scoreboard)
         if payload is not None:
-            changed = await apply_live(db, parse_scoreboard(payload))
+            changed = await apply_live(db, parse_scoreboard(payload), now)
             if changed:
                 logger.info("scoreboard: updated %s", ", ".join(changed))
 

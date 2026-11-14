@@ -295,3 +295,21 @@ def test_reseeding_an_old_file_keeps_a_newer_final_score(db, league):
 
     nyk = game(db, VS_NYK)
     assert (nyk.status, nyk.home_score, nyk.arena_name) == ("final", 110, "Scotiabank Arena")
+
+
+
+# --- final_at, which closes a game's chat room ---
+
+def test_going_final_on_the_live_scoreboard_records_when(db, league, nba):
+    tick()
+    nba.scoreboard = load("scoreboard.json")
+    phi = next(g for g in nba.scoreboard["scoreboard"]["games"] if g["gameId"] == AT_PHI)
+    phi.update(gameStatus=3, gameStatusText="Final")
+    tick(LIVE_NOW + timedelta(minutes=10))
+    assert game(db, AT_PHI).final_at == LIVE_NOW + timedelta(minutes=10)
+
+
+def test_a_game_caught_up_by_the_schedule_has_no_final_at(db, league, nba):
+    tick() # the opener arrives already final, from the schedule
+    assert game(db, OPENER).status == "final"
+    assert game(db, OPENER).final_at is None # so its chat room is closed: it ended weeks ago

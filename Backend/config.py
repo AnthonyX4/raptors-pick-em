@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     # pagination: the page size used when a request doesn't pass ?limit=
     items_per_page: int = 10 # the admin lists
     games_per_page: int = 20 # a month of games fits on one page
+    messages_per_page: int = 50 # a screen or two of chat
+
+    # chat rules (decided): a game's room is open on game day, 24h before tipoff until 3h after it ends,
+    # and a message can be edited for 5 minutes. settings rather than constants so tests and deploys can read them
+    chat_opens_hours_before: int = 24
+    chat_closes_hours_after: int = 3
+    message_edit_minutes: int = 5
+    message_max_length: int = 500
+    mute_max_hours: int = 24 * 30
     max_page_size: int = 100 # the largest ?limit= a request may ask for
 
     reset_token_expire_minutes: int = 60 # how long a password reset link works for

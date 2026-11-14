@@ -17,8 +17,8 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 6 | Picks (locked at tipoff) | Done |
 | 7 | Results and scoring | Done |
 | 8 | Leaderboard | Done |
-| 9 | Game chat messages | |
-| 10 | Reactions and moderation | |
+| 9 | Game chat messages | Done |
+| 10 | Reactions and moderation | Done |
 | 11 | Game-night score polling | Done (built before 9 and 10) |
 | 12 | Reminder emails | |
 

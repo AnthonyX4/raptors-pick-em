@@ -1,14 +1,14 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-13 at the end of step 11. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 at the end of steps 9 and 10. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 8 and 11 are done: the backend is a complete Pick'em app that runs itself. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; and the poller, which keeps games, box scores and scores current from the NBA's CDN.
-- 227 tests pass (`cd Backend && uv run pytest`, about three minutes).
+- Steps 1 to 11 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
+- 279 tests pass (`cd Backend && uv run pytest`, about four minutes).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
-- Steps 9, 10 and 12 are not started. The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
+- Step 12 (reminder emails) is not started. The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
 
 ## Decisions already made
 
@@ -20,7 +20,7 @@ Written 2026-11-12, updated 2026-11-13 at the end of step 11. Read this with `RE
 
 **The CDN works from a datacenter IP, but only for a browser-like client.** Checked 2026-11-13 by `.github/workflows/nba-reachability.yml` (step 4.5) on a GitHub runner (Azure). From the same runner, `curl` got a 403 Akamai "Access Denied" page for all three feeds, while `nba_api`'s live endpoints got 200 for all three. So the protection keys on the client, not the IP. Consequences for step 11: fetch through `nba_api` (or `NBALiveHTTP.headers` for the schedule, which it doesn't wrap), never a bare HTTP client. And Akamai rules can change without notice: the poller should log refusals loudly, and the workflow is worth re-running if it ever starts failing. Azure isn't AWS, so this is strong evidence rather than proof for ECS. If AWS turns out to be refused, the fallback is a small feeder at home that fetches from the NBA and posts results to an admin-only ingest endpoint.
 
-**No soft delete.** Removed deliberately in commit `c9a578b`; deleting a user removes the row. For picks this is settled: they cascade with the account (`User.picks`, delete-orphan). For chat messages (step 9) it is still open: cascade them too, or make the author nullable and show "[deleted]". Do not reintroduce `deleted_at` by reflex.
+**No soft delete.** Removed deliberately in commit `c9a578b`; deleting a user removes the row. Picks cascade with it. Chat messages stay with a null author, shown as "[deleted]" (decided in step 9), so conversations still read; the user's likes and mute go. Do not reintroduce `deleted_at` by reflex.
 
 **Picks rules (step 6), chosen by Anthony.** Six launch categories (winner, margin, Raptors' points, rebounds, assists and steals leaders). Stat-leader picks are Raptors players only, checked against the roster as last harvested. Picks on a postponed game are kept and reopen when it's rescheduled. A deleted account takes its picks with it.
 
@@ -42,7 +42,19 @@ Written 2026-11-12, updated 2026-11-13 at the end of step 11. Read this with `RE
 
 **`sqlite_autoincrement` on `User`.** A token carries only `{"sub": "<user_id>"}` and stays valid until it expires, so a reused id would let a deleted user's token authenticate as a new account. SQLite reuses the largest freed id without `AUTOINCREMENT`. Postgres sequences already behave correctly, so this is a SQLite-stage fix; `tests/test_tokens.py` is what keeps it true after the migration.
 
-**No Alembic.** Tables are created from the models at startup, so a model change means deleting `Backend/raptors.db`. Revisit when moving to Postgres.
+**No Alembic, yet.** Tables are created from the models at startup, which only ever adds missing *tables*. Step 9 added the first column to an existing table (`games.final_at`), applied by hand to Anthony's database with `ALTER TABLE` so his test accounts and picks survived; a fresh database gets it from the model. That one-off is exactly what Alembic formalizes, so adopt it with the move to Postgres.
+
+**Chat rules (steps 9 and 10), chosen by Anthony.** Rooms are open on game day only: 24h before tipoff until 3h after the game ends. Edit your own message within 5 minutes, delete it any time. A deleted account's messages stay as "[deleted]". Mutes are timed; the admin picks the length (up to 30 days).
+
+**Chat rules that follow from those.**
+- "Ends" is `Game.final_at`, when the poller saw the game go final on the live scoreboard, not `scored_at` (a forced rescore moves that and would reopen the room). A game that arrives already final (seeded, or caught up by the schedule refresh) has no `final_at`, so its room is closed. A postponed game's room is closed until it's rescheduled.
+- Reading a room is always public, even when closed. Liking needs the room open; unliking doesn't.
+- A muted user can still read and like, but can't post or edit (editing would be posting by another route).
+- Cursor pagination by message id, so `messages` uses `AUTOINCREMENT`: without it, deleting the newest message hands its id to the next one and a client polling `?after=` misses or misorders it.
+- Someone else's message is a 403 (messages are public, nothing to hide), unlike someone else's pick (404, picks are secret until tipoff).
+- Likes are `PUT`/`DELETE` on `/messages/{id}/like`, idempotent: liking twice is liking once. Muting is `PUT` because a second mute replaces the first, which is how an admin shortens a mistaken one. Admins can't be muted, for the same reason they can't be deleted.
+- Mutes are their own table rather than a `users` column: moderation data stays out of the user row, and it avoided altering `users`.
+- Mute times and message timestamps come from the chat's clock (`routers.messages.utcnow`), not column defaults, so the edit window and mute expiry measure from the same clock tests move.
 
 ## Design agreed for later steps
 
@@ -103,7 +115,7 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 The backend is complete and runs itself. What's left, in no fixed order:
 
-- **Docker, Postgres, Compose, then ECS.** The original goal for this project. Three containers locally (api, poller, Postgres), then the api and poller as two ECS services, Postgres on RDS. Postgres also brings back the question of Alembic.
-- **The frontend**, now that there's a complete API to build against.
-- **Steps 9 and 10, chat**, still with the open cascade-or-"[deleted]" decision for a deleted user's messages.
+- **Docker, Postgres, Compose, then ECS.** The original goal for this project. Three containers locally (api, poller, Postgres), then the api and poller as two ECS services, Postgres on RDS, with Alembic for the schema.
+- **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).
 - **Step 12, reminder emails**, which would ride on the poller's loop.
+- **Small API improvements found while testing:** a `picks_open` field on each game (computed by the same function as the lock, so a frontend can't disagree with it), a `?upcoming=true` games filter, and Swagger examples for `POST /api/picks` (its pre-filled body sends all three answer fields, which the API rightly refuses).

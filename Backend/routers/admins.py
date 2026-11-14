@@ -1,3 +1,4 @@
+from datetime import timedelta
 from typing import Annotated
 
 # Fastapi
@@ -6,6 +7,7 @@ from fastapi import Depends, status, HTTPException, APIRouter, Query
 from database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 import models
 
 from config import settings
@@ -23,8 +25,10 @@ from schemas import (
 )
 from routers.pick_categories import category_key
 from routers.games import TEAM_LOADERS
-from schemas import GameScoreResponse
+from schemas import GameScoreResponse, MuteCreate, MuteResponse, PaginatedMutesResponse
 import scoring
+# mutes are checked by the chat, so they're timed by the chat's clock: one clock, which tests move as one
+from routers import messages as chat
 
 # the dependency on the router itself protects every route below, a new route can't forget the admin check
 router = APIRouter(dependencies=[Depends(get_current_admin)])
@@ -178,3 +182,95 @@ async def score_game(game_id: str, db: Annotated[AsyncSession, Depends(get_db)],
         return await scoring.score_game(db, game, force=force)
     except scoring.ScoringError as err:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(err)) from err
+
+
+# DELETE, remove any message from any game's chat
+@router.delete(
+    "/messages/{message_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_message(message_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+
+    message = await db.get(models.Message, message_id)
+
+    if not message:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
+
+    await db.delete(message) # its likes go with it (cascade)
+    await db.commit()
+
+# PUT, stop a user posting for a number of hours. PUT because muting again replaces the old mute:
+# a second mute for 1 hour shortens a 24 hour one, which is how an admin corrects a mistake
+@router.put(
+    "/users/{user_id}/mute",
+    response_model=MuteResponse,
+)
+async def mute_user(user_id: int, mute: MuteCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+
+    user = await db.get(models.User, user_id)
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # same reasoning as refusing to delete an admin: one admin (or a stolen admin token) can't silence the others
+    if user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admins can't be muted")
+
+    muted_until = chat.utcnow() + timedelta(hours=mute.hours)
+    existing = await db.get(models.Mute, user_id)
+    if existing:
+        existing.muted_until, existing.reason = muted_until, mute.reason
+    else:
+        db.add(models.Mute(user_id=user_id, muted_until=muted_until, reason=mute.reason))
+    await db.commit()
+
+    result = await db.execute(
+        select(models.Mute).options(selectinload(models.Mute.user)).where(models.Mute.user_id == user_id),
+    )
+    return result.scalars().one()
+
+# DELETE, lift a mute early. nothing to lift is fine too: the outcome is the same, the user can post
+@router.delete(
+    "/users/{user_id}/mute",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def unmute_user(user_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+
+    mute = await db.get(models.Mute, user_id)
+    if mute:
+        await db.delete(mute)
+        await db.commit()
+
+# GET, one page of the mutes still in force, the soonest to expire first
+@router.get(
+    "/mutes",
+    response_model=PaginatedMutesResponse,
+)
+async def get_mutes(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=settings.max_page_size)] = settings.items_per_page,
+):
+
+    active = models.Mute.muted_until > chat.utcnow() # expired mutes stay in the table but don't count
+
+    count_result = await db.execute(select(func.count()).select_from(models.Mute).where(active))
+    total = count_result.scalar() or 0
+
+    result = await db.execute(
+        select(models.Mute)
+        .options(selectinload(models.Mute.user))
+        .where(active)
+        .order_by(models.Mute.muted_until, models.Mute.user_id)
+        .offset(skip)
+        .limit(limit),
+    )
+    mutes = result.scalars().all()
+
+    return PaginatedMutesResponse(
+        mutes=[MuteResponse.model_validate(mute) for mute in mutes],
+        total=total,
+        skip=skip,
+        limit=limit,
+        has_more=skip + len(mutes) < total,
+    )
