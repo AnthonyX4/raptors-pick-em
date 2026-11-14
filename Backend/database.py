@@ -1,14 +1,13 @@
-from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-DB_PATH = Path(__file__).resolve().parent / "raptors.db" # anchored to Backend/ so the db resolves the same regardless of cwd
-SQLITE_ALCHEMY_LINK = f"sqlite+aiosqlite:///{DB_PATH}" # aiosqlite is the async driver for sqlite
+from config import settings
 
-# connect sqlalchemy to database
+# connect sqlalchemy to the database named by settings.database_url (sqlite+aiosqlite unless told otherwise)
 engine = create_async_engine(
-    SQLITE_ALCHEMY_LINK,
-    connect_args={"check_same_thread": False},
+    settings.database_url,
+    # sqlite only: allow the connection to be used from the thread aiosqlite runs it on
+    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -23,21 +22,3 @@ class Base(DeclarativeBase):
 async def get_db():
     async with AsyncSessionLocal() as db:
         yield db
-
-"""
-uuid is used to generate unique file names
-BytesIO is used for working wit image bytes in memory (without saving to disk)
-Path for file operations
-Image is used for main image 
-Image OPS for image operations
-
-JPEG require standard RGB mode, so convert to RGB if the image is in a different mode (like RGBA or P)
-
-
-useful design pattern:
-
-if we deleted profile picture first and database update fails, we have no way to restore the old image path and the user will have no profile picture
-
-alternative is to delete the old image after the database update is successful, but then we have a temporary duplicate image on disk until the next time the user updates their profile picture
-
-"""

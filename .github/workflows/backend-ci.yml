@@ -1,0 +1,80 @@
+# Runs on every push to main that touches the backend: the test suite, then the Docker image built
+# and exercised the way it will run for real: seeded database on a volume, the API serving requests,
+# the poller doing one pass against the live NBA CDN, and a clean shutdown on SIGTERM.
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Backend/**"
+      - ".github/workflows/backend-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run pytest -q -p no:warnings
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t raptors-pick-em Backend
+
+      - name: What's in it
+        run: |
+          docker image ls raptors-pick-em
+          echo "runs as: $(docker run --rm raptors-pick-em id)"
+          echo "/app holds:"; docker run --rm raptors-pick-em ls -A /app
+          docker run --rm raptors-pick-em python -c "import fastapi, nba_api, PIL, argon2; print('imports ok')"
+
+      # the same shape as a real .env, passed in at run time, never built into the image
+      - name: A throwaway env file
+        run: |
+          printf 'SECRET_KEY=ci-only-not-a-real-secret-key-0123456789\nS3_BUCKET_NAME=ci-bucket\n' > ci.env
+
+      - name: Seed a database on a named volume
+        run: |
+          docker volume create raptors-data
+          docker run --rm --env-file ci.env -v raptors-data:/app/data raptors-pick-em python harvest_scripts/seed.py
+
+      - name: Start the API
+        run: |
+          docker run -d --name api --env-file ci.env -p 8000:8000 -v raptors-data:/app/data raptors-pick-em
+          for i in $(seq 1 30); do curl -fsS localhost:8000/health && echo && break; sleep 1; done
+
+      - name: Smoke test the API
+        run: |
+          curl -fsS localhost:8000/health
+          echo; echo "--- headers on GET /"
+          curl -fsS -D - -o /dev/null localhost:8000/ | grep -i -E "^(x-frame|x-content|referrer|strict)"
+          echo "--- next game"
+          curl -fsS "localhost:8000/api/games?upcoming=true&limit=1" | python3 -m json.tool
+          echo "--- pick categories"
+          curl -fsS localhost:8000/api/pick-categories | python3 -c "import json,sys; print([c['key'] for c in json.load(sys.stdin)])"
+
+      - name: The poller, one pass, from the same image
+        run: docker run --rm --env-file ci.env -v raptors-data:/app/data raptors-pick-em python poller.py --once
+
+      - name: The API saw the poller's writes (same volume)
+        run: curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games')"
+
+      - name: Stops cleanly on SIGTERM
+        run: |
+          docker stop api
+          docker inspect api --format 'exit code {{.State.ExitCode}}'
+          docker logs api 2>&1 | tail -n 5
+
+      - name: API logs
+        if: failure()
+        run: docker logs api || true

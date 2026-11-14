@@ -1,17 +1,20 @@
 # Fastapi
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 
 # Database
-from database import engine, Base
+from database import engine, Base, get_db
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 
 # Schemas
-from schemas import MessageResponse
+from schemas import HealthResponse, MessageResponse
 
 # Cross Origin Resource Sharing (front and backend connection)
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +55,21 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+# security headers on every response. cheap, and they close off browser-side tricks: being framed by
+# another site (clickjacking), a browser guessing a json response is html (sniffing), full urls leaking
+# to other sites in the Referer header, and a downgrade to plain http once the site has been seen on https
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if "Referrer-Policy" not in response.headers:
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # hsts tells a browser to only ever use https for this host, so never on a local dev server
+    if request.url.hostname not in ("localhost", "127.0.0.1"):
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
+
 app.include_router(users.router, prefix="/api/users", tags=["users"])
 app.include_router(games.router, prefix="/api/games", tags=["games"])
 app.include_router(players.router, prefix="/api/players", tags=["players"])
@@ -70,6 +88,23 @@ app.include_router(admins.router, prefix="/api/admin", tags=["admin"])
 )
 async def home():
     return MessageResponse(message=f"{settings.app_name} API is running")
+
+# GET, "can this container actually serve requests": unlike GET / it runs a query, so a lost or
+# misconfigured database shows up as a 503. what a deploy or docker compose waits on before sending traffic.
+# a load balancer's routine check should stay on GET /: if the database blips, every container would fail
+# this at once and be restarted, which doesn't bring the database back
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    tags=["home"],
+    responses={503: {"description": "The database is unreachable"}},
+)
+async def health(db: Annotated[AsyncSession, Depends(get_db)]):
+    try:
+        await db.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable") from exc
+    return HealthResponse(status="healthy")
 
 # Static files: GET /static/<path> returns the file at static/<path> (public, no auth)
 # "static" is relative to the directory the server is started from, so run it from Backend/

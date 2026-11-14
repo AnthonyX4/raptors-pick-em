@@ -1,0 +1,22 @@
+# What never goes into the image. `COPY . ./` copies the whole Backend/ folder except these.
+# (The repo's .git/ and .github/ sit above Backend/, outside the build context, so they're excluded already.)
+
+# secrets: passed in when a container starts (--env-file .env, or ECS secrets), never baked into an image
+.env
+.env.*
+
+# local data: a container gets its database from a volume or DATABASE_URL, never a copy of your laptop's
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# rebuilt inside the image: copying your Windows .venv would break the Linux one
+.venv/
+__pycache__/
+*.pyc
+
+# development only
+tests/
+.pytest_cache/
+.python-version

@@ -58,6 +58,10 @@ class ResetPasswordRequest(BaseModel):
     token: str # the token from the emailed link's ?token= query param
     new_password: str = Field(min_length=8) # same rule as UserCreate.password
 
+class HealthResponse(BaseModel):
+    status: str
+
+
 class MessageResponse(BaseModel):
     message: str
 
