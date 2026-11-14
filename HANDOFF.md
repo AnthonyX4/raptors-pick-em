@@ -1,11 +1,11 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 at the end of step 13. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 at the end of step 14. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
-- 298 tests pass (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
+- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image, step 14 moved it to Postgres with Alembic migrations. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
+- 298 tests pass on SQLite and on Postgres (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
 - The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
@@ -42,7 +42,7 @@ Written 2026-11-12, updated 2026-11-14 at the end of step 13. Read this with `RE
 
 **`sqlite_autoincrement` on `User`.** A token carries only `{"sub": "<user_id>"}` and stays valid until it expires, so a reused id would let a deleted user's token authenticate as a new account. SQLite reuses the largest freed id without `AUTOINCREMENT`. Postgres sequences already behave correctly, so this is a SQLite-stage fix; `tests/test_tokens.py` is what keeps it true after the migration.
 
-**No Alembic, yet.** Tables are created from the models at startup, which only ever adds missing *tables*. Step 9 added the first column to an existing table (`games.final_at`), applied by hand to Anthony's database with `ALTER TABLE` so his test accounts and picks survived; a fresh database gets it from the model. Step 12 did the same for `users.email_reminders` and `games.reminder_sent_at`. Those one-offs are exactly what Alembic formalizes, so adopt it with the move to Postgres.
+**Alembic since step 14.** Before it, tables came from `create_all` and new columns (`games.final_at`, `users.email_reminders`, `games.reminder_sent_at`) were added to Anthony's SQLite database by hand with `ALTER TABLE`. Those one-offs are what Alembic replaced.
 
 **Chat rules (steps 9 and 10), chosen by Anthony.** Rooms are open on game day only: 24h before tipoff until 3h after the game ends. Edit your own message within 5 minutes, delete it any time. A deleted account's messages stay as "[deleted]". Mutes are timed; the admin picks the length (up to 30 days).
 
@@ -77,6 +77,16 @@ Written 2026-11-12, updated 2026-11-14 at the end of step 13. Read this with `RE
 - `.dockerignore` keeps out `.env`, every `*.db`, `.venv`, `tests/`. No system packages needed: Pillow, argon2 and (step 14) asyncpg all ship wheels with their C libraries inside.
 - The image is about 650 MB unpacked, 150 MB compressed. Most of it is pandas and numpy, pulled in by `nba_api`. The poller needs `nba_api`, so it stays for now.
 - My workspace can't pull from Docker Hub, so `.github/workflows/backend-ci.yml` does the real check on every backend push: the test suite, then the image built, a volume seeded, the API curled, the poller run once against the live CDN, and a clean stop.
+
+**Postgres and Alembic (step 14), adapted from the sneaker store's `postgres-alembic` branch.** Same shape: `DATABASE_URL` required with no default, an async `alembic/env.py` that takes the url from settings, the app no longer creates tables. Differences, and why:
+- **`asyncpg`, not `psycopg`.** psycopg's async mode can't run on the ProactorEventLoop Windows uses by default, which forced `loop_factory=asyncio.SelectorEventLoop` into every script in the sneaker store and kept `fastapi run` from working on Windows. asyncpg has no such limit, so the poller, seed and alembic run unchanged on Anthony's machine. `psycopg[binary]` is only a dev dependency, as the sync driver for the test fixtures on Postgres.
+- **Tests run on both databases.** The sneaker store's tests stay on SQLite. Here `TEST_DATABASE_URL` switches the same suite to Postgres, and CI always uses it, so a Postgres-only behaviour (string length limits, `LIKE` case-sensitivity, sequences) can't pass unnoticed. All 298 passed on Postgres first time; SQLite stays the zero-setup default locally.
+- **`UTCDateTime` stays**, rendered into migrations as plain `sa.DateTime(timezone=True)` (`render_item` in `env.py`). On Postgres it's a `timestamptz` and the decorator does nothing; it keeps the SQLite test database honest. The sneaker store patched a single column in `conftest.py` instead, which doesn't scale to fifteen datetime columns.
+- **The default pick categories stay in the lifespan**, not in a data migration: they're insert-only, an admin can edit them, and the tests (which use `create_all`) need them too.
+- **Unmigrated databases fail early with the fix spelled out.** The api refuses to start, and the poller and seed exit, with "run alembic upgrade head" (`database.has_table`), instead of a "relation does not exist" mid-request.
+- **Migrations aren't run by the api at startup.** Two api containers starting together would race. Locally it's a command; in Compose (step 15) a one-shot service the api waits on; on ECS a one-off task before a deploy.
+- **Local Postgres on port 5433** (`raptors-db` container, `raptors-pgdata` volume), because the sneaker store's container already holds 5432. CI and the docs use `postgres:17`.
+- `copy_sqlite_to_postgres.py` moved Anthony's `raptors.db` across (tested on a copy of it: 2 users, 2 picks, 80 games, 338 box score lines), then moves each id sequence past the largest copied id so the next signup doesn't collide.
 
 ## Design agreed for later steps
 
@@ -137,5 +147,5 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 The backend is complete and runs itself. What's left:
 
-- **Postgres, Compose, then ECS** (steps 14 to 16). Docker is done. Next: `asyncpg` and Alembic, with `DateTime(timezone=True)` replacing `UTCDateTime` and tests against a real Postgres; then three containers locally (api, poller, Postgres with a named volume and a health check); then the api and poller as two ECS services, Postgres on RDS.
+- **Compose, then ECS** (steps 15 and 16). Docker and Postgres are done. Next: one `docker compose up` for Postgres (named volume, health check), a one-shot `migrate` service, then the api and poller once it has succeeded; then the api and poller as two ECS services, migrations as a one-off task, Postgres on RDS.
 - **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).

@@ -6,28 +6,32 @@ Guidance for Claude Code when working in this repository.
 
 Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chat room. Backend only so far. `HANDOFF.md` has the decisions made so far and the design agreed for steps not yet built.
 
-- `Backend/` — FastAPI + SQLAlchemy 2.x (async, `aiosqlite` driver), managed with `uv`, Python >=3.14.
+- `Backend/` — FastAPI + SQLAlchemy 2.x (async) on PostgreSQL (`asyncpg` driver), schema managed with Alembic, managed with `uv`, Python >=3.14. Tests run on SQLite (`aiosqlite`) by default and on Postgres when `TEST_DATABASE_URL` is set.
 - Built step by step, the plan and current state are the table in `README.md`. Keep that table up to date when a step is finished.
 - Forked from the account system of the sneaker store project, so the conventions below match that codebase.
 
 ## Commands (run from `Backend/`)
 
 - Install deps: `uv sync`
-- Dev server: `uv run fastapi dev main.py` (port 8000). Needs a `.env`, see `.env.example`.
-- Tests: `uv run pytest`. They need no `.env`: `conftest.py` sets `SECRET_KEY`/`S3_BUCKET_NAME`, and the autouse `s3_bucket` and `outbox` fixtures replace S3 and email with in-memory fakes.
+- Database: Postgres in the `raptors-db` container on port 5433 (`docker start raptors-db`; the README has the `docker run` that creates it). `psql`: `docker exec -it raptors-db psql -U raptors`.
+- Migrations: `uv run alembic upgrade head`. After changing a model: `uv run alembic revision --autogenerate -m "..."`, read the file in `alembic/versions/`, then upgrade. `uv run alembic check` fails on drift between models and migrations; CI runs it.
+- Dev server: `uv run fastapi dev main.py` (port 8000). Needs a `.env` with `DATABASE_URL`, see `.env.example`.
+- Tests: `uv run pytest`. They need no `.env`: `conftest.py` sets `SECRET_KEY`/`S3_BUCKET_NAME`/`DATABASE_URL`, and the autouse `s3_bucket` and `outbox` fixtures replace S3 and email with in-memory fakes. A temp SQLite file by default; `TEST_DATABASE_URL=postgresql+asyncpg://.../raptors_test` runs them on Postgres (the name must end in `_test`, every test drops all tables). CI always uses Postgres. Tests build tables with `create_all`, not migrations.
 - Grant admin: `uv run python harvest_scripts/make_admin.py <email> [--revoke]` (deliberately no endpoint).
 - `.github/workflows/nba-reachability.yml` — manual GitHub Action checking the cdn.nba.com feeds are reachable from a datacenter IP, which the production poller depends on.
 - Verify the real bucket: `uv run check_s3.py`.
 - Poller: `uv run python poller.py` (or `--once`). A separate process from the api; run exactly one.
-- Docker: `docker build -t raptors-pick-em Backend` from the repo root. One image: the api by default, the poller with `python poller.py`. Data on a volume at `/app/data`, secrets with `--env-file`. README has the full run commands. `.github/workflows/backend-ci.yml` runs the tests and smoke-tests the image on every backend push.
+- Docker: `docker build -t raptors-pick-em Backend` from the repo root. One image: the api by default, `python poller.py` for the poller, `alembic upgrade head` for migrations. No data in the image: `DATABASE_URL` and secrets come in at run time. README has the run commands. `.github/workflows/backend-ci.yml` checks the migrations, runs the tests on Postgres and smoke-tests the image next to a Postgres container on every backend push.
+- Old SQLite data: `uv run python harvest_scripts/copy_sqlite_to_postgres.py raptors.db` copies a pre-step-14 database into an empty migrated Postgres, ids and sequences intact.
 - `.github/workflows/capture-nba-samples.yml` saves real cdn payloads (also printed into the job log, since artifact downloads may be unreachable); `poller-smoke.yml` runs the real poller once against the live cdn on a fresh seeded database. Both manual.
 - Load NBA data: `uv run python harvest_scripts/seed.py` (reads the committed `nba_data.json`). Refresh it with `harvest_scripts/harvest.py`, which only works off-cloud.
 
 ## Architecture
 
-- `main.py` — app entrypoint. Creates tables and the default pick categories in the `lifespan` startup with `Base.metadata.create_all` (**no Alembic**: changing a model means deleting `raptors.db`). CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a cheap health message that touches no database (for a load balancer's routine check); `GET /health` runs `SELECT 1` and is a 503 without a database. A middleware adds security headers to every response.
+- `main.py` — app entrypoint. The `lifespan` refuses to start if the tables don't exist (they come only from Alembic, never `create_all`), then inserts the default pick categories. CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a cheap health message that touches no database (for a load balancer's routine check); `GET /health` runs `SELECT 1` and is a 503 without a database. A middleware adds security headers to every response.
 - `config.py` — `Settings` (pydantic-settings) read from `.env`. `app_name` is the display name used in the docs and emails.
-- `database.py` — async engine on `settings.database_url` (default `raptors.db` anchored to `Backend/`; the Docker image points it at `/app/data`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency.
+- `database.py` — async engine on `settings.database_url` (required, no default; `pool_pre_ping`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency, and `has_table()`, which the api, poller and seed use to fail with "run alembic upgrade head" on an unmigrated database.
+- `alembic/` + `alembic.ini` — migrations. `env.py` takes the url from `settings.database_url` (the ini has none), imports `models` for autogenerate, and renders `UTCDateTime` as plain `sa.DateTime(timezone=True)` so migration files never import the models.
 - `models.py` — `User`, `PasswordResetToken`, `PickCategory`, `Pick`, `Message`, `MessageLike`, `Mute`, and the NBA data: `Team`, `Player`, `Game`, `PlayerGameStat` (`Mapped`/`mapped_column` style). NBA rows use the NBA's own ids as primary keys, which is what makes re-seeding an update rather than a duplicate. Every datetime column is `UTCDateTime`, never a plain `DateTime`.
 - `schemas.py` — Pydantic v2 models with `ConfigDict(from_attributes=True)`. Paginated lists subclass `PaginatedResponse`.
 - `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. A deleted user's still-unexpired token stops working at the next request, because the user is looked up every time. `OptionalUser` is the same check for public pages that show more to a logged-in reader: None without a token, still a 401 with an invalid one.
@@ -62,7 +66,8 @@ What goes with the account: picks (cascade, `User.picks`), likes and any mute. W
 - Never call `nba_api` from a request handler: stats.nba.com is slow, rate limited and blocks cloud provider IPs. NBA data is loaded into the database by scripts and background tasks, and endpoints read only from the database.
 - Fetch cdn.nba.com through `nba_api`'s live endpoints or with `NBALiveHTTP.headers`. Its bot protection refuses a bare client such as `curl` with a 403, even where `nba_api` gets through (see `HANDOFF.md`).
 - Comments are lowercase, explain why rather than what, and sit at the end of the line or just above the code.
-- Datetime columns use `UTCDateTime` (models.py). SQLite drops the timezone, and a naive datetime both serializes without an offset (a browser reads it as local time) and can't be compared with `datetime.now(UTC)`.
+- Datetime columns use `UTCDateTime` (models.py): a `timestamptz` on Postgres. It's a no-op there but keeps the SQLite test database returning aware datetimes; a naive datetime serializes without an offset (a browser reads it as local time) and can't be compared with `datetime.now(UTC)`.
+- Schema changes go through a new Alembic migration, never by editing an applied one; `sqlite_autoincrement` on `users`/`messages` only matters to the SQLite test database (Postgres sequences never reuse ids).
 - The followed team is `settings.team_tricode` ("TOR"), never hardcoded.
 - The chat's schemas are `ChatMessage*`: `MessageResponse` is the generic `{"message": ...}` reply used by the health check and password reset.
 - Anything that writes a game's status goes through `schemas.can_move_status`: never backwards (except scheduled <-> postponed). The seed script, the scoreboard and the schedule refresh all write games and aren't equally fresh.
