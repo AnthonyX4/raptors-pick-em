@@ -1,11 +1,11 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 at the end of step 12. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 at the end of step 13. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
-- 294 tests pass (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
+- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
+- 298 tests pass (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
 - The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
@@ -68,6 +68,16 @@ Written 2026-11-12, updated 2026-11-14 at the end of step 12. Read this with `RE
 
 **Small API additions (after step 12).** `GameResponse.picks_open` is filled in by the route with `routers.picks.picks_open`, the same function that enforces the lock, so a frontend never re-derives it. `GET /api/games?upcoming=true` lists games not over yet (scheduled, live or postponed) and `false` finished ones, by status rather than the clock so a game in progress counts as upcoming. `POST` and `PATCH /api/picks` have one Swagger example per category kind, since the auto-generated body filled in all three answers and was always refused.
 
+**Docker (step 13), adapted from Corey Schafer's FastAPI deployment tutorial.** A two-stage uv build: the builder installs dependencies (cached on `pyproject.toml` + `uv.lock` alone, so code edits don't reinstall) and the final stage copies only `/app`, so uv and its download cache never reach the image. Python 3.14.6 and uv 0.11.32 are pinned exactly. Runs as a non-root `appuser`, one server process per container (scale by adding containers), `exec` so SIGTERM reaches the server.
+- **One image, two programs.** The default command is the API; the poller is `python poller.py` on the same image. They can't drift apart, and Compose and ECS will run the image twice with different commands.
+- **`DATABASE_URL` became a setting.** The default is still `Backend/raptors.db`, so nothing changes on a laptop. The image sets it to `/app/data/raptors.db`, a directory created owned by `appuser` so a fresh named volume mounted there inherits that owner. Step 14 only changes this value.
+- **No `HEALTHCHECK` in the Dockerfile**, because the poller runs from the same image and serves no port. Each service defines its own check in Compose or ECS.
+- **`GET /health` runs `SELECT 1`** (503 without a database), for deploys and Compose to wait on. A load balancer's routine check should stay on `GET /`: a database blip would fail every container's `/health` at once and restart them all, which doesn't help.
+- **Security headers middleware** on every response (frame, sniffing, referrer, HSTS except on localhost), straight from the tutorial.
+- `.dockerignore` keeps out `.env`, every `*.db`, `.venv`, `tests/`. No system packages needed: Pillow, argon2 and (step 14) asyncpg all ship wheels with their C libraries inside.
+- The image is about 650 MB unpacked, 150 MB compressed. Most of it is pandas and numpy, pulled in by `nba_api`. The poller needs `nba_api`, so it stays for now.
+- My workspace can't pull from Docker Hub, so `.github/workflows/backend-ci.yml` does the real check on every backend push: the test suite, then the image built, a volume seeded, the API curled, the poller run once against the live CDN, and a clean stop.
+
 ## Design agreed for later steps
 
 Worked out in discussion and should be followed unless there's a reason to change. Pick categories (step 5) are now built as described; the rest is not built yet.
@@ -127,5 +137,5 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 The backend is complete and runs itself. What's left:
 
-- **Docker, Postgres, Compose, then ECS.** The original goal for this project. Three containers locally (api, poller, Postgres), then the api and poller as two ECS services, Postgres on RDS, with Alembic for the schema.
+- **Postgres, Compose, then ECS** (steps 14 to 16). Docker is done. Next: `asyncpg` and Alembic, with `DateTime(timezone=True)` replacing `UTCDateTime` and tests against a real Postgres; then three containers locally (api, poller, Postgres with a named volume and a health check); then the api and poller as two ECS services, Postgres on RDS.
 - **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).

@@ -19,14 +19,15 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - `.github/workflows/nba-reachability.yml` — manual GitHub Action checking the cdn.nba.com feeds are reachable from a datacenter IP, which the production poller depends on.
 - Verify the real bucket: `uv run check_s3.py`.
 - Poller: `uv run python poller.py` (or `--once`). A separate process from the api; run exactly one.
+- Docker: `docker build -t raptors-pick-em Backend` from the repo root. One image: the api by default, the poller with `python poller.py`. Data on a volume at `/app/data`, secrets with `--env-file`. README has the full run commands. `.github/workflows/backend-ci.yml` runs the tests and smoke-tests the image on every backend push.
 - `.github/workflows/capture-nba-samples.yml` saves real cdn payloads (also printed into the job log, since artifact downloads may be unreachable); `poller-smoke.yml` runs the real poller once against the live cdn on a fresh seeded database. Both manual.
 - Load NBA data: `uv run python harvest_scripts/seed.py` (reads the committed `nba_data.json`). Refresh it with `harvest_scripts/harvest.py`, which only works off-cloud.
 
 ## Architecture
 
-- `main.py` — app entrypoint. Creates tables and the default pick categories in the `lifespan` startup with `Base.metadata.create_all` (**no Alembic**: changing a model means deleting `raptors.db`). CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a cheap health message that touches no database, for container health checks.
+- `main.py` — app entrypoint. Creates tables and the default pick categories in the `lifespan` startup with `Base.metadata.create_all` (**no Alembic**: changing a model means deleting `raptors.db`). CORS for `localhost:5173` and `localhost:3000`. Routers are mounted here with their prefix and tag. `GET /` is a cheap health message that touches no database (for a load balancer's routine check); `GET /health` runs `SELECT 1` and is a 503 without a database. A middleware adds security headers to every response.
 - `config.py` — `Settings` (pydantic-settings) read from `.env`. `app_name` is the display name used in the docs and emails.
-- `database.py` — async engine on `raptors.db` (anchored to `Backend/`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency.
+- `database.py` — async engine on `settings.database_url` (default `raptors.db` anchored to `Backend/`; the Docker image points it at `/app/data`), `AsyncSessionLocal` (`expire_on_commit=False`), the `get_db()` dependency.
 - `models.py` — `User`, `PasswordResetToken`, `PickCategory`, `Pick`, `Message`, `MessageLike`, `Mute`, and the NBA data: `Team`, `Player`, `Game`, `PlayerGameStat` (`Mapped`/`mapped_column` style). NBA rows use the NBA's own ids as primary keys, which is what makes re-seeding an update rather than a duplicate. Every datetime column is `UTCDateTime`, never a plain `DateTime`.
 - `schemas.py` — Pydantic v2 models with `ConfigDict(from_attributes=True)`. Paginated lists subclass `PaginatedResponse`.
 - `auth.py` — argon2 hashing (`pwdlib`), JWT (`pyjwt`), the `CurrentUser` / `AdminUser` dependencies. A deleted user's still-unexpired token stops working at the next request, because the user is looked up every time. `OptionalUser` is the same check for public pages that show more to a logged-in reader: None without a token, still a 401 with an invalid one.

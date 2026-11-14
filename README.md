@@ -21,8 +21,12 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 10 | Reactions and moderation | Done |
 | 11 | Game-night score polling | Done (built before 9 and 10) |
 | 12 | Reminder emails | Done: sent by the poller 2h before tipoff to users missing picks |
+| 13 | Docker image | Done: one image runs both the API and the poller, built and smoke-tested in CI |
+| 14 | Postgres and Alembic | |
+| 15 | Docker Compose (api, poller, Postgres) | |
+| 16 | AWS ECS (two services, RDS) | |
 
-Later: Docker, Postgres, Docker Compose, AWS ECS, WebSockets.
+Later: the React frontend, WebSockets.
 
 ## Running the backend
 
@@ -42,6 +46,25 @@ To keep the database in step with real games (live scores, box scores and scorin
 uv run python poller.py           # until Ctrl+C
 uv run python poller.py --once    # a single pass
 ```
+
+### With Docker
+
+The same image runs both programs. Build it from the repo root (needs [Docker Desktop](https://www.docker.com/products/docker-desktop/)):
+
+```
+docker build -t raptors-pick-em Backend
+```
+
+The database lives on a named volume (`raptors-data`), so it survives containers being removed. Secrets come from your `.env` at run time and are never built into the image:
+
+```
+docker volume create raptors-data
+docker run --rm --env-file Backend/.env -v raptors-data:/app/data raptors-pick-em python harvest_scripts/seed.py
+docker run -d --name api --env-file Backend/.env -v raptors-data:/app/data -p 8000:8000 raptors-pick-em
+docker run -d --name poller --env-file Backend/.env -v raptors-data:/app/data raptors-pick-em python poller.py
+```
+
+`docker logs -f api` follows a container's output, `docker stop api poller` stops them (cleanly, on SIGTERM), and `docker rm api poller` removes them while the volume keeps the data. The container's database is separate from your laptop's `Backend/raptors.db`. `GET /health` reports whether the API can reach its database.
 
 To refresh the season's data from scratch (rosters included), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
 
