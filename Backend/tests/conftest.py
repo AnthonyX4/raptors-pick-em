@@ -19,26 +19,43 @@ os.environ.setdefault("S3_BUCKET_NAME", "test-bucket")
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR)) # so main/models/database are importable when pytest runs from anywhere
 
+# which database the tests run on:
+#   - by default a throwaway sqlite file: no docker, no setup, fast
+#   - TEST_DATABASE_URL=postgresql+asyncpg://.../raptors_test runs the same suite on real postgres, which is
+#     what production runs. ci always does this; locally, point it at a database made only for tests,
+#     every test creates and drops all the tables in it
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+if TEST_DATABASE_URL:
+    if not TEST_DATABASE_URL.rsplit("/", 1)[-1].endswith("_test"):
+        sys.exit("TEST_DATABASE_URL must name a database ending in _test, the tests drop every table in it")
+    async_url = TEST_DATABASE_URL
+    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "+psycopg") # fixtures are sync, psycopg is postgres's sync driver
+    connect_args = {}
+else:
+    # a temp file rather than in-memory so the two engines below can share it
+    TEST_DB_DIR = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    TEST_DB_PATH = Path(TEST_DB_DIR.name) / "test.db"
+    async_url = f"sqlite+aiosqlite:///{TEST_DB_PATH}"
+    sync_url = f"sqlite:///{TEST_DB_PATH}"
+    connect_args = {"check_same_thread": False}
+
+# DATABASE_URL is required by config.py; real environment variables win over .env, so this also keeps
+# the tests from ever seeing the real database's url
+os.environ["DATABASE_URL"] = async_url
+
 import database
 
-# swap in a throwaway database BEFORE main is imported, main's lifespan create_all must never touch raptors.db
-# it's a temp file rather than in-memory so two engines can share it:
-#   - the app gets an async (aiosqlite) engine, same as production
-#   - fixtures get a plain sync engine, so tests can set up and inspect data without an event loop
-TEST_DB_DIR = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-TEST_DB_PATH = Path(TEST_DB_DIR.name) / "test.db"
-
+# swap in the test database BEFORE main is imported, so nothing the app does can reach a real one:
+#   - the app gets an async engine (aiosqlite or asyncpg), same as production
+#   - fixtures get a plain sync engine on the same database, so tests can set up and inspect data without an event loop
 # NullPool opens a fresh connection per session, so no connection is reused across the event loops
-# TestClient and asyncio.run create (a pooled aiosqlite connection is tied to the loop that opened it)
-test_async_engine = create_async_engine(
-    f"sqlite+aiosqlite:///{TEST_DB_PATH}",
-    connect_args={"check_same_thread": False},
-    poolclass=NullPool,
-)
+# TestClient and asyncio.run create (a pooled async connection is tied to the loop that opened it)
+test_async_engine = create_async_engine(async_url, connect_args=connect_args, poolclass=NullPool)
 database.engine = test_async_engine
 TestAsyncSession = async_sessionmaker(test_async_engine, class_=AsyncSession, expire_on_commit=False)
+database.AsyncSessionLocal = TestAsyncSession
 
-test_sync_engine = create_engine(f"sqlite:///{TEST_DB_PATH}", poolclass=NullPool)
+test_sync_engine = create_engine(sync_url, poolclass=NullPool)
 TestSession = sessionmaker(autocommit=False, autoflush=False, bind=test_sync_engine)
 
 import main

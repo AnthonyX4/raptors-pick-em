@@ -1,4 +1,4 @@
-# Runs the real poller once against the real cdn.nba.com, from a datacenter ip, on a fresh
+# Runs the real poller once against the real cdn.nba.com, from a datacenter ip, on a fresh postgres
 # database seeded from nba_data.json, then prints what it changed. The poller's unit tests use
 # recorded payloads; this is the end-to-end check that the whole chain works on live data.
 # Manual: run it from the Actions tab after changing the poller, or if the nba's feeds change.
@@ -13,35 +13,45 @@ jobs:
     defaults:
       run:
         working-directory: Backend
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: raptors
+          POSTGRES_PASSWORD: raptors
+          POSTGRES_DB: raptors
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U raptors"
+          --health-interval 2s --health-timeout 5s --health-retries 15
     env:
+      DATABASE_URL: postgresql+asyncpg://raptors:raptors@localhost:5432/raptors
       SECRET_KEY: smoke-test-only-not-a-real-secret-key-0123456789
       S3_BUCKET_NAME: smoke-test
+      PGPASSWORD: raptors
+      PSQL: psql -h localhost -U raptors -d raptors
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
 
-      - name: Seed a fresh database from the committed harvest
+      - name: Migrate and seed a fresh database from the committed harvest
         run: |
           uv sync --quiet
+          uv run alembic upgrade head
           uv run python harvest_scripts/seed.py
 
       - name: Snapshot before
-        run: uv run python -c "import sqlite3; c=sqlite3.connect('raptors.db'); print(c.execute('select status, count(*), sum(scored_at is not null) from games group by status').fetchall())"
+        run: $PSQL -c "select status, count(*), count(scored_at) as scored from games group by status"
 
       - name: One poller tick
         run: uv run python poller.py --once
 
       - name: What changed
         run: |
-          uv run python - <<'PY'
-          import sqlite3
-          c = sqlite3.connect("raptors.db")
-          print("games by status (status, count, scored):", c.execute("select status, count(*), sum(scored_at is not null) from games group by status").fetchall())
-          print("box score lines:", c.execute("select count(*) from player_game_stats").fetchone()[0])
-          print("latest games:")
-          for row in c.execute("""
-              select g.game_id, a.tricode || ' @ ' || h.tricode, g.status, g.status_text, g.away_score, g.home_score, g.scored_at is not null
-              from games g join teams h on h.team_id = g.home_team_id join teams a on a.team_id = g.away_team_id
-              where g.tipoff_utc <= datetime('now', '+2 days') order by g.tipoff_utc desc limit 4"""):
-              print("  ", row)
-          PY
+          $PSQL -c "select status, count(*), count(scored_at) as scored from games group by status"
+          $PSQL -c "select count(*) as box_score_lines from player_game_stats"
+          $PSQL -c "
+            select g.game_id, a.tricode || ' @ ' || h.tricode as matchup, g.status, g.status_text,
+                   g.away_score, g.home_score, g.scored_at is not null as scored
+            from games g join teams h on h.team_id = g.home_team_id join teams a on a.team_id = g.away_team_id
+            where g.tipoff_utc <= now() + interval '2 days' order by g.tipoff_utc desc limit 4"

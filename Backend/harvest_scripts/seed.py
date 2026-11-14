@@ -20,7 +20,7 @@ sys.path.insert(0, str(BACKEND_DIR)) # so database/models are importable regardl
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import AsyncSessionLocal, Base, engine
+from database import AsyncSessionLocal, NOT_MIGRATED, engine, has_table
 import models
 from schemas import can_move_status
 
@@ -116,9 +116,10 @@ async def main() -> int:
     payload = json.loads(DATA_PATH.read_text(encoding="utf-8"))
     print(f"Seeding {payload['team_tricode']} {payload['season']}, harvested {payload['harvested_at'][:19]}\n")
 
-    # the api creates tables on startup, but seeding may well run before the server ever has
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # the tables come from the migrations (uv run alembic upgrade head), seeding only fills them
+    if not await has_table("games"):
+        print(f"{NOT_MIGRATED} ❌")
+        return 1
 
     async with AsyncSessionLocal() as db:
         for label, counts in [

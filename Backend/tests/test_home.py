@@ -38,7 +38,7 @@ def test_every_response_carries_the_security_headers(client):
         assert response.headers["Strict-Transport-Security"].startswith("max-age=")
 
 
-def test_no_hsts_on_a_local_dev_server():
+def test_no_hsts_on_a_local_dev_server(db): # db: the app checks its tables exist on startup
     from fastapi.testclient import TestClient
     import main
 

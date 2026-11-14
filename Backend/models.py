@@ -12,8 +12,8 @@ class UTCDateTime(TypeDecorator):
     sqlite has no timezone type, so a plain DateTime(timezone=True) reads back naive.
     the api would then send "2026-11-13T00:00:00" with no offset, a browser in toronto
     would read it as local time (five hours off), and comparing it with datetime.now(UTC),
-    which the tipoff lock does, raises a TypeError. postgres keeps the offset, so once
-    migrated this is a no-op rather than something to remove.
+    which the tipoff lock does, raises a TypeError. on postgres it's a timestamptz, which
+    keeps the offset, so this is a no-op there; it stays for the sqlite test database.
     """
     impl = DateTime(timezone=True)
     cache_ok = True

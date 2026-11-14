@@ -1,5 +1,5 @@
-# One image for both programs. The default command runs the API; the poller runs from the same image
-# with a different command (docker run <image> python poller.py), so the two can never drift apart.
+# One image for every program. The default command runs the API; the same image runs the poller
+# (python poller.py) and the migrations (alembic upgrade head), so they can never drift apart.
 #
 # Two stages: the builder has uv and installs everything, the final stage starts from a clean base and
 # copies in only /app (the code plus its .venv). uv itself and its download cache never reach the image.
@@ -41,16 +41,13 @@ RUN useradd --create-home appuser
 
 COPY --from=builder --chown=appuser:appuser /app /app
 
-# where the sqlite file lives inside the container. mount a volume here (docker run -v raptors-data:/app/data)
-# or it disappears with the container. created now, owned by appuser, so a fresh volume inherits that owner
-RUN mkdir -p /app/data && chown appuser:appuser /app/data
-
 USER appuser
 
+# no DATABASE_URL here: the container holds no data. it's given the postgres to use when it starts
+# (--env-file, docker compose, ecs), which is what lets the same image run anywhere
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    PORT=8000 \
-    DATABASE_URL=sqlite+aiosqlite:////app/data/raptors.db
+    PORT=8000
 
 EXPOSE 8000
 

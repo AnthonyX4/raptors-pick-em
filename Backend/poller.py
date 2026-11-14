@@ -44,7 +44,7 @@ import email_utils
 import models
 import scoring
 from config import settings
-from database import AsyncSessionLocal, Base, engine
+from database import AsyncSessionLocal, NOT_MIGRATED, engine, has_table
 from routers.games import TEAM_LOADERS
 from routers.pick_categories import ensure_default_categories
 from schemas import GameStatus, can_move_status
@@ -485,9 +485,11 @@ async def run(once: bool = False) -> None:
         except NotImplementedError:
             pass # windows: Ctrl+C still works, it just interrupts mid-tick
 
-    # the poller may well start before the api ever has
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # tables come from the migrations, which may not have run yet on a fresh database
+    if not await has_table("games"):
+        logger.error(NOT_MIGRATED)
+        await engine.dispose()
+        return
     async with AsyncSessionLocal() as db:
         await ensure_default_categories(db)
 

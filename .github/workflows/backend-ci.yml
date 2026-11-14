@@ -1,6 +1,7 @@
-# Runs on every push to main that touches the backend: the test suite, then the Docker image built
-# and exercised the way it will run for real: seeded database on a volume, the API serving requests,
-# the poller doing one pass against the live NBA CDN, and a clean shutdown on SIGTERM.
+# Runs on every push to main that touches the backend:
+#   - tests: migrations applied to an empty postgres, checked against the models, undone and reapplied;
+#     then the whole suite on postgres, the database production runs
+#   - docker: the image built and run the way it will be deployed, next to a postgres container
 name: Backend CI
 
 on:
@@ -11,17 +12,51 @@ on:
       - ".github/workflows/backend-ci.yml"
   workflow_dispatch:
 
+env:
+  POSTGRES_IMAGE: postgres:17
+
 jobs:
   tests:
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: Backend
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: raptors
+          POSTGRES_PASSWORD: raptors
+          POSTGRES_DB: raptors
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U raptors"
+          --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql+asyncpg://raptors:raptors@localhost:5432/raptors
+      TEST_DATABASE_URL: postgresql+asyncpg://raptors:raptors@localhost:5432/raptors_test
+      SECRET_KEY: ci-only-not-a-real-secret-key-0123456789
+      S3_BUCKET_NAME: ci-bucket
+      PGPASSWORD: raptors
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked
-      - run: uv run pytest -q -p no:warnings
+
+      - name: Migrations apply, match the models, and undo cleanly
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+      - name: Seed onto the migrated schema
+        run: uv run python harvest_scripts/seed.py
+
+      - name: Tests on postgres
+        run: |
+          psql -h localhost -U raptors -d raptors -c "CREATE DATABASE raptors_test"
+          uv run pytest -q -p no:warnings
 
   docker:
     runs-on: ubuntu-latest
@@ -36,21 +71,29 @@ jobs:
           docker image ls raptors-pick-em
           echo "runs as: $(docker run --rm raptors-pick-em id)"
           echo "/app holds:"; docker run --rm raptors-pick-em ls -A /app
-          docker run --rm raptors-pick-em python -c "import fastapi, nba_api, PIL, argon2; print('imports ok')"
+          docker run --rm raptors-pick-em python -c "import fastapi, nba_api, PIL, argon2, asyncpg, alembic; print('imports ok')"
+
+      # containers on one network reach each other by name: the api finds postgres at db:5432
+      - name: Postgres on a network, its data on a named volume
+        run: |
+          docker network create raptors
+          docker run -d --name db --network raptors -v raptors-pgdata:/var/lib/postgresql/data \
+            -e POSTGRES_USER=raptors -e POSTGRES_PASSWORD=raptors -e POSTGRES_DB=raptors $POSTGRES_IMAGE
+          for i in $(seq 1 30); do docker exec db pg_isready -U raptors && break; sleep 1; done
 
       # the same shape as a real .env, passed in at run time, never built into the image
       - name: A throwaway env file
         run: |
-          printf 'SECRET_KEY=ci-only-not-a-real-secret-key-0123456789\nS3_BUCKET_NAME=ci-bucket\n' > ci.env
+          printf 'SECRET_KEY=ci-only-not-a-real-secret-key-0123456789\nS3_BUCKET_NAME=ci-bucket\nDATABASE_URL=postgresql+asyncpg://raptors:raptors@db:5432/raptors\n' > ci.env
 
-      - name: Seed a database on a named volume
+      - name: Migrate and seed, from the image
         run: |
-          docker volume create raptors-data
-          docker run --rm --env-file ci.env -v raptors-data:/app/data raptors-pick-em python harvest_scripts/seed.py
+          docker run --rm --network raptors --env-file ci.env raptors-pick-em alembic upgrade head
+          docker run --rm --network raptors --env-file ci.env raptors-pick-em python harvest_scripts/seed.py
 
       - name: Start the API
         run: |
-          docker run -d --name api --env-file ci.env -p 8000:8000 -v raptors-data:/app/data raptors-pick-em
+          docker run -d --name api --network raptors --env-file ci.env -p 8000:8000 raptors-pick-em
           for i in $(seq 1 30); do curl -fsS localhost:8000/health && echo && break; sleep 1; done
 
       - name: Smoke test the API
@@ -64,10 +107,18 @@ jobs:
           curl -fsS localhost:8000/api/pick-categories | python3 -c "import json,sys; print([c['key'] for c in json.load(sys.stdin)])"
 
       - name: The poller, one pass, from the same image
-        run: docker run --rm --env-file ci.env -v raptors-data:/app/data raptors-pick-em python poller.py --once
+        run: docker run --rm --network raptors --env-file ci.env raptors-pick-em python poller.py --once
 
-      - name: The API saw the poller's writes (same volume)
+      - name: The API saw the poller's writes (same database)
         run: curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games')"
+
+      - name: Postgres keeps its data when its container is replaced
+        run: |
+          docker rm -f db
+          docker run -d --name db --network raptors -v raptors-pgdata:/var/lib/postgresql/data $POSTGRES_IMAGE
+          for i in $(seq 1 30); do docker exec db pg_isready -U raptors && break; sleep 1; done
+          sleep 2
+          curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games after the database container was recreated')"
 
       - name: Stops cleanly on SIGTERM
         run: |
@@ -75,6 +126,8 @@ jobs:
           docker inspect api --format 'exit code {{.State.ExitCode}}'
           docker logs api 2>&1 | tail -n 5
 
-      - name: API logs
+      - name: Logs
         if: failure()
-        run: docker logs api || true
+        run: |
+          docker logs api || true
+          docker logs db || true

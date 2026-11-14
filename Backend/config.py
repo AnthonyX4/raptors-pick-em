@@ -1,9 +1,5 @@
-from pathlib import Path
-
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-BACKEND_DIR = Path(__file__).resolve().parent
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -14,10 +10,10 @@ class Settings(BaseSettings):
 
     app_name: str = "Raptors Pick'em" # shown in the api docs and in emails
 
-    # where the data lives. the default is raptors.db next to this file, so running from a laptop needs
-    # nothing set. the docker image points it into /app/data, where a volume keeps it, and step 14
-    # swaps it for a postgres url without touching any code
-    database_url: str = f"sqlite+aiosqlite:///{BACKEND_DIR / 'raptors.db'}"
+    # which postgres to use, e.g. postgresql+asyncpg://raptors:raptors@localhost:5433/raptors (asyncpg is
+    # the async driver). no default: guessing a database is worse than refusing to start. in docker compose
+    # and on ecs it's the same setting pointing elsewhere, so no code changes between environments
+    database_url: str
 
     secret_key: SecretStr # this type displays *** instead of actual value when printing or logging
     algorithm: str = "HS256" # default value

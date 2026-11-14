@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 
 # Database
-from database import engine, Base, get_db
+from database import engine, get_db, has_table, NOT_MIGRATED
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,9 +28,10 @@ from routers import admins, games, leaderboard, messages, pick_categories, picks
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Startup: table creation in database (create_all is sync, run_sync runs it on the async connection)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Startup: tables are created and changed by alembic migrations (uv run alembic upgrade head), never here.
+    # the app only checks they exist, and inserts the default pick categories if they're missing
+    if not await has_table("pick_categories"):
+        raise RuntimeError(NOT_MIGRATED)
     # a session on this module's engine, not database.AsyncSessionLocal: the tests swap the engine
     # before main is imported, and the session factory would still point at the real database
     async with AsyncSession(engine, expire_on_commit=False) as db:
