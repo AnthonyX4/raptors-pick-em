@@ -136,3 +136,31 @@ def test_missing_game_is_404(client, games):
 def test_games_need_no_token(client, games):
     assert client.get("/api/games").status_code == 200
     assert client.get("/api/games/0022600001").status_code == 200
+
+
+# --- upcoming and picks_open ---
+
+def test_upcoming_lists_games_not_over_yet(client, db, games):
+    import models
+    db.get(models.Game, "0022600002").status = "live" # in progress still counts as upcoming
+    db.commit()
+    page = list_games(client, upcoming="true")
+    assert [g["game_id"] for g in page["games"]] == ["0022600002", "0022600003"]
+    assert page["total"] == 2
+
+
+def test_upcoming_false_lists_finished_games(client, games):
+    assert [g["game_id"] for g in list_games(client, upcoming="false")["games"]] == games[:3]
+
+
+def test_picks_open_follows_the_lock(client, games, monkeypatch):
+    from datetime import datetime, UTC
+    import routers.picks as picks_router
+
+    monkeypatch.setattr(picks_router, "utcnow", lambda: datetime(2026, 11, 30, tzinfo=UTC))
+    by_id = {g["game_id"]: g["picks_open"] for g in list_games(client)["games"]}
+    assert by_id == {games[0]: False, games[1]: False, games[2]: False, "0022600003": True}
+    assert client.get("/api/games/0022600003").json()["picks_open"] is True
+
+    monkeypatch.setattr(picks_router, "utcnow", lambda: datetime(2026, 12, 1, 0, 30, tzinfo=UTC)) # tipoff
+    assert client.get("/api/games/0022600003").json()["picks_open"] is False

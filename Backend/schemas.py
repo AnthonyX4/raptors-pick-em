@@ -33,12 +33,14 @@ class UserPublic(BaseModel):
 
 class UserPrivate(UserPublic):
     email: EmailStr
+    email_reminders: bool # only the user themselves sees their settings
 
 class UserUpdate(BaseModel):
     # password isn't here, it's changed through PATCH /me/password (ChangePasswordRequest)
     username: str | None = Field(default=None, min_length=1, max_length=50, pattern=USERNAME_PATTERN)
     email: EmailStr | None = Field(default=None)
     current_password: str | None = Field(default=None) # required to change email
+    email_reminders: bool | None = None # a setting, not a credential, so no current_password needed
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
@@ -158,6 +160,9 @@ class GameResponse(BaseModel):
     arena_name: str | None
     period: int | None # only set while a game is live
     game_clock: str | None
+    # whether picks can be made right now. filled in by the route with the same function that enforces
+    # the lock, so a frontend never has to redo (and possibly disagree with) the clock and status logic
+    picks_open: bool = False
 
 
 class PaginatedGamesResponse(PaginatedResponse):

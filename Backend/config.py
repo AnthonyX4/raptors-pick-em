@@ -43,6 +43,11 @@ class Settings(BaseSettings):
 
     reset_token_expire_minutes: int = 60 # how long a password reset link works for
 
+    # step 12: the poller emails users who haven't finished their picks this long before tipoff
+    reminder_hours_before: int = 2
+    # the time zone tipoffs are shown in, in emails. the api itself only ever speaks utc
+    display_timezone: str = "America/Toronto"
+
     # email (smtp), the defaults are placeholders, the real values come from .env
     mail_server: str = "localhost"
     mail_port: int = 587

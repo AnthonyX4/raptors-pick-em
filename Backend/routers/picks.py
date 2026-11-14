@@ -2,7 +2,7 @@ from datetime import datetime, UTC
 from typing import Annotated
 
 # Fastapi
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
 # Database
 from database import get_db
@@ -23,6 +23,32 @@ from schemas import (
 )
 
 router = APIRouter()
+
+# swagger's "try it out" pre-fills a body with every field, which sends all three answers and gets a
+# 422. these give it one valid body per kind of category instead, picked from a dropdown. the ids
+# are the ones a fresh database gets: categories from GET /api/pick-categories, Raptors 1610612761,
+# Scottie Barnes 1630567, game 0022600241 (NYK @ TOR)
+CREATE_EXAMPLES = {
+    "winner": {
+        "summary": "Winner: fill in team_id",
+        "value": {"game_id": "0022600241", "pick_category_id": 1, "team_id": 1610612761},
+    },
+    "margin": {
+        "summary": "Margin of victory: fill in margin",
+        "description": "The winning margin in points, whoever wins. It only scores if your winner pick is right too.",
+        "value": {"game_id": "0022600241", "pick_category_id": 2, "margin": 7},
+    },
+    "stat_leader": {
+        "summary": "Stat leader: fill in player_id",
+        "description": "A Raptor, from GET /api/players?team=TOR.",
+        "value": {"game_id": "0022600241", "pick_category_id": 3, "player_id": 1630567},
+    },
+}
+UPDATE_EXAMPLES = {
+    "winner": {"summary": "Change a winner pick", "value": {"team_id": 1610612752}},
+    "margin": {"summary": "Change a margin pick", "value": {"margin": 12}},
+    "stat_leader": {"summary": "Change a stat leader pick", "value": {"player_id": 1630567}},
+}
 
 # everything PickResponse/PickWithUser nests, an async session can't lazy load any of it
 PICK_LOADERS = (
@@ -144,7 +170,11 @@ async def missing_required(db: AsyncSession, user_id: int, game_id: str) -> list
     response_model=PickResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_pick(pick: PickCreate, user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]):
+async def create_pick(
+    pick: Annotated[PickCreate, Body(openapi_examples=CREATE_EXAMPLES)],
+    user: CurrentUser,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
 
     game = await get_open_game(db, pick.game_id)
 
@@ -285,7 +315,7 @@ async def get_game_picks(
 )
 async def update_pick(
     pick_id: int,
-    update: PickUpdate,
+    update: Annotated[PickUpdate, Body(openapi_examples=UPDATE_EXAMPLES)],
     user: CurrentUser,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):

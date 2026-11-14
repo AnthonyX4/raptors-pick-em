@@ -1,5 +1,7 @@
+from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import aiosmtplib
 from fastapi.templating import Jinja2Templates
@@ -65,6 +67,50 @@ If you didn't request this, you can safely ignore this email. Your password will
     await send_email(
         to_email=to_email,
         subject=f"Reset your password - {settings.app_name}",
+        plain_text=plain_text,
+        html_content=html_content,
+    )
+
+
+def format_tipoff(tipoff_utc: datetime) -> str:
+    """"Sun Nov 15, 6:00 pm EST", in settings.display_timezone. built by hand because strftime's
+    unpadded day and hour codes (%-d, %-I) don't exist on windows"""
+    local = tipoff_utc.astimezone(ZoneInfo(settings.display_timezone))
+    hour = local.hour % 12 or 12
+    meridiem = "am" if local.hour < 12 else "pm"
+    return f"{local:%a %b} {local.day}, {hour}:{local:%M} {meridiem} {local.tzname()}"
+
+
+async def send_pick_reminder_email(
+    to_email: str, username: str, matchup: str, tipoff_utc: datetime, game_id: str, missing: list[str],
+) -> None:
+    # links to the react app's game page, where the pick form will live
+    game_url = f"{settings.frontend_url}/games/{game_id}"
+    tipoff = format_tipoff(tipoff_utc)
+
+    template = templates.env.get_template("email/pick_reminder.html")
+    html_content = template.render(
+        app_name=settings.app_name, username=username, matchup=matchup, tipoff=tipoff,
+        missing=missing, game_url=game_url,
+    )
+
+    missing_lines = "\n".join(f"- {name}" for name in missing)
+    plain_text = f"""Hi {username},
+
+{matchup} tips off at {tipoff}, and picks lock the moment it starts. You haven't made these yet:
+
+{missing_lines}
+
+Make your picks: {game_url}
+
+You get this because pick reminders are on in your {settings.app_name} account settings. Turn them off there any time.
+
+- The {settings.app_name} Team
+"""
+
+    await send_email(
+        to_email=to_email,
+        subject=f"Picks lock soon: {matchup} - {settings.app_name}",
         plain_text=plain_text,
         html_content=html_content,
     )

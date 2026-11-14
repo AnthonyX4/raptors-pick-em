@@ -1,14 +1,14 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 at the end of steps 9 and 10. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 at the end of step 12. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 11 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
-- 279 tests pass (`cd Backend && uv run pytest`, about four minutes).
+- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
+- 294 tests pass (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
-- Step 12 (reminder emails) is not started. The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
+- The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
 
 ## Decisions already made
 
@@ -42,7 +42,7 @@ Written 2026-11-12, updated 2026-11-14 at the end of steps 9 and 10. Read this w
 
 **`sqlite_autoincrement` on `User`.** A token carries only `{"sub": "<user_id>"}` and stays valid until it expires, so a reused id would let a deleted user's token authenticate as a new account. SQLite reuses the largest freed id without `AUTOINCREMENT`. Postgres sequences already behave correctly, so this is a SQLite-stage fix; `tests/test_tokens.py` is what keeps it true after the migration.
 
-**No Alembic, yet.** Tables are created from the models at startup, which only ever adds missing *tables*. Step 9 added the first column to an existing table (`games.final_at`), applied by hand to Anthony's database with `ALTER TABLE` so his test accounts and picks survived; a fresh database gets it from the model. That one-off is exactly what Alembic formalizes, so adopt it with the move to Postgres.
+**No Alembic, yet.** Tables are created from the models at startup, which only ever adds missing *tables*. Step 9 added the first column to an existing table (`games.final_at`), applied by hand to Anthony's database with `ALTER TABLE` so his test accounts and picks survived; a fresh database gets it from the model. Step 12 did the same for `users.email_reminders` and `games.reminder_sent_at`. Those one-offs are exactly what Alembic formalizes, so adopt it with the move to Postgres.
 
 **Chat rules (steps 9 and 10), chosen by Anthony.** Rooms are open on game day only: 24h before tipoff until 3h after the game ends. Edit your own message within 5 minutes, delete it any time. A deleted account's messages stay as "[deleted]". Mutes are timed; the admin picks the length (up to 30 days).
 
@@ -55,6 +55,18 @@ Written 2026-11-12, updated 2026-11-14 at the end of steps 9 and 10. Read this w
 - Likes are `PUT`/`DELETE` on `/messages/{id}/like`, idempotent: liking twice is liking once. Muting is `PUT` because a second mute replaces the first, which is how an admin shortens a mistaken one. Admins can't be muted, for the same reason they can't be deleted.
 - Mutes are their own table rather than a `users` column: moderation data stays out of the user row, and it avoided altering `users`.
 - Mute times and message timestamps come from the chat's clock (`routers.messages.utcnow`), not column defaults, so the edit window and mute expiry measure from the same clock tests move.
+
+**Reminder emails (step 12), defaults Claude chose, easy to change in `config.py`.** The poller emails each user a couple of hours (`reminder_hours_before = 2`) before tipoff, listing the active categories they haven't picked yet. Nobody who has made every pick is emailed. Users opt out with `email_reminders` (on by default) through `PATCH /api/users/{id}`, no password needed since it's a setting, not a credential; only `/me` and the owner's own responses show it.
+
+**Reminder rules that follow from those.**
+- Sent at most once per game: `Game.reminder_sent_at` is committed *before* any email goes out. A crash mid-send means some people miss one reminder; the other order would mean everyone getting it twice after a restart.
+- A late poller still sends while picks are open (window is `tipoff - 2h <= now < tipoff`); after tipoff a reminder is useless, so it doesn't. Postponed games aren't reminded. A tipoff the schedule refresh moves clears `reminder_sent_at`, so the new date gets its own reminder.
+- One failed email (bad address, SMTP hiccup) is logged and skipped; it never stops the others or the poller.
+- `next_interval` wakes the poller for a reminder window as well as a game's watch, so reminders aren't up to 15 minutes late.
+- Times in emails are shown in `display_timezone` (America/Toronto); the API itself only speaks UTC. `tzdata` is a direct dependency because Windows and slim Docker images have no system time zone database.
+- Emails link to `<FRONTEND_URL>/games/<game_id>`, a page the frontend will need.
+
+**Small API additions (after step 12).** `GameResponse.picks_open` is filled in by the route with `routers.picks.picks_open`, the same function that enforces the lock, so a frontend never re-derives it. `GET /api/games?upcoming=true` lists games not over yet (scheduled, live or postponed) and `false` finished ones, by status rather than the clock so a game in progress counts as upcoming. `POST` and `PATCH /api/picks` have one Swagger example per category kind, since the auto-generated body filled in all three answers and was always refused.
 
 ## Design agreed for later steps
 
@@ -78,7 +90,7 @@ Worked out in discussion and should be followed unless there's a reason to chang
 
 **The poller is a separate process** (step 11, built). Not a task in the api's lifespan, so two api containers can't mean two pollers racing. On ECS it becomes its own service with a desired count of 1; in Docker Compose, a second service from the same image with `command: python poller.py`.
 
-**The poller does three jobs** (built). A daily schedule refresh (new NBA Cup games, moved tipoffs, postponed games going back to scheduled, which reopens their picks, and final scores for any game it missed entirely); live scores for games on or about to start; box scores and scoring for finished games. It moves `Player.team_id` to the team a player last appeared for, since there's no cloud-reachable roster feed. It scores immediately when a box score says final; if the NBA later corrects a stat, an admin rescores with `?force=true`.
+**The poller does four jobs** (built). A daily schedule refresh (new NBA Cup games, moved tipoffs, postponed games going back to scheduled, which reopens their picks, and final scores for any game it missed entirely); pick reminder emails before tipoff (step 12); live scores for games on or about to start; box scores and scoring for finished games. It moves `Player.team_id` to the team a player last appeared for, since there's no cloud-reachable roster feed. It scores immediately when a box score says final; if the NBA later corrects a stat, an admin rescores with `?force=true`.
 
 **Statuses never move backwards** (`schemas.can_move_status`), except between scheduled and postponed. Three writers touch games (seed, scoreboard, schedule refresh) and they aren't equally fresh; without this, an old harvest re-seeded or a stale feed would turn a finished game back into a scheduled one, wipe its score and reopen its picks.
 
@@ -113,9 +125,7 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 ## Next: a choice of direction
 
-The backend is complete and runs itself. What's left, in no fixed order:
+The backend is complete and runs itself. What's left:
 
 - **Docker, Postgres, Compose, then ECS.** The original goal for this project. Three containers locally (api, poller, Postgres), then the api and poller as two ECS services, Postgres on RDS, with Alembic for the schema.
 - **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).
-- **Step 12, reminder emails**, which would ride on the poller's loop.
-- **Small API improvements found while testing:** a `picks_open` field on each game (computed by the same function as the lock, so a frontend can't disagree with it), a `?upcoming=true` games filter, and Swagger examples for `POST /api/picks` (its pre-filled body sends all three answer fields, which the API rightly refuses).

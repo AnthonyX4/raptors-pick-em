@@ -12,6 +12,9 @@ import models
 
 from config import settings
 
+# the lock itself, so picks_open on a game can never disagree with what POST /api/picks enforces
+from routers.picks import picks_open
+
 # Schemas
 from schemas import GameDetail, GameStatus, PaginatedGamesResponse, GameResponse
 
@@ -36,7 +39,13 @@ async def team_id_for_tricode(db: AsyncSession, tricode: str) -> int:
     return team_id
 
 
-# GET, one page of games, oldest first, so ?status=scheduled puts the next game at the top (public)
+def game_response(game: models.Game, schema: type[GameResponse] = GameResponse) -> GameResponse:
+    response = schema.model_validate(game)
+    response.picks_open = picks_open(game)
+    return response
+
+
+# GET, one page of games, oldest first, so ?upcoming=true puts the current or next game at the top (public)
 @router.get(
     "",
     response_model=PaginatedGamesResponse,
@@ -46,6 +55,9 @@ async def get_games(
     season: Annotated[str | None, Query(max_length=7)] = None, # "2026-27"
     status_filter: Annotated[GameStatus | None, Query(alias="status")] = None, # ?status=, renamed so it doesn't shadow fastapi's status module
     opponent: Annotated[str | None, Query(max_length=3)] = None, # a tricode: every game here involves our team, so this matches the other side
+    # true: games not over yet (scheduled, live or postponed). false: finished ones. by status rather
+    # than the clock, so a game in progress counts as upcoming until it's actually final
+    upcoming: bool | None = None,
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=settings.max_page_size)] = settings.games_per_page,
 ):
@@ -55,6 +67,10 @@ async def get_games(
         filters.append(models.Game.season == season)
     if status_filter is not None:
         filters.append(models.Game.status == status_filter)
+    if upcoming is True:
+        filters.append(models.Game.status != GameStatus.FINAL)
+    elif upcoming is False:
+        filters.append(models.Game.status == GameStatus.FINAL)
     if opponent is not None:
         opponent_id = await team_id_for_tricode(db, opponent)
         filters.append(or_(
@@ -79,7 +95,7 @@ async def get_games(
     has_more = skip + len(games) < total
 
     return PaginatedGamesResponse(
-        games=[GameResponse.model_validate(game) for game in games],
+        games=[game_response(game) for game in games],
         total=total,
         skip=skip,
         limit=limit,
@@ -112,4 +128,4 @@ async def get_game(game_id: str, db: Annotated[AsyncSession, Depends(get_db)]):
     # highest scorer first: the box score is read to see who led, not in roster order
     game.player_stats.sort(key=lambda stat: stat.points, reverse=True)
 
-    return game
+    return game_response(game, GameDetail)

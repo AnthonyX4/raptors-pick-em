@@ -6,11 +6,12 @@
         uv run python poller.py           # runs until stopped (Ctrl+C, or SIGTERM from a container)
         uv run python poller.py --once    # one pass, then exit: handy for checking it works
 
-    Each pass ("tick") does three jobs:
+    Each pass ("tick") does four jobs:
       1. once a day, refresh the schedule: new games (the NBA Cup ones only get dates in December),
          changed tipoffs, and postponed games moving back to scheduled, which reopens their picks
-      2. while a game is on or about to start, copy the live scoreboard into it
-      3. for every finished game not yet scored: fetch its box score if we don't have one, then score it
+      2. a couple of hours before tipoff, email everyone who hasn't finished their picks (step 12)
+      3. while a game is on or about to start, copy the live scoreboard into it
+      4. for every finished game not yet scored: fetch its box score if we don't have one, then score it
     then sleeps 30 seconds while a game is on, up to 15 minutes when nothing is.
 
     It's a separate process, not a task inside the api, so that running two api containers can't
@@ -39,6 +40,7 @@ from nba_api.live.nba.library.http import NBALiveHTTP
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import email_utils
 import models
 import scoring
 from config import settings
@@ -231,7 +233,10 @@ async def apply_schedule(db: AsyncSession, games: list[dict]) -> dict[str, int]:
         if game.status == GameStatus.FINAL:
             continue
 
-        # dates and places: the schedule is the authority, this is how a rescheduled game moves
+        # dates and places: the schedule is the authority, this is how a rescheduled game moves.
+        # a moved game gets reminded again for its new date
+        if game.tipoff_utc != fields["tipoff_utc"]:
+            game.reminder_sent_at = None
         game.tipoff_utc = fields["tipoff_utc"]
         game.arena_name = fields["arena_name"]
         if can_move_status(game.status, fields["status"]) and fields["status"] != game.status:
@@ -298,6 +303,65 @@ async def ingest_box_score(db: AsyncSession, lines: list[dict]) -> int:
     return len(lines)
 
 
+# --- reminders (step 12) ---
+
+def reminder_lead() -> timedelta:
+    return timedelta(hours=settings.reminder_hours_before)
+
+
+def reminder_due(game: models.Game, now: datetime) -> bool:
+    """Not yet reminded, still open, and inside the window before tipoff.
+
+    A poller that was off when the window opened still sends late ones, as long as picks are open.
+    """
+    return (
+        game.status == GameStatus.SCHEDULED
+        and game.reminder_sent_at is None
+        and game.tipoff_utc - reminder_lead() <= now < game.tipoff_utc
+    )
+
+
+async def send_reminders(db: AsyncSession, game: models.Game, now: datetime) -> int:
+    """Email every user with reminders on who is missing at least one active pick for this game.
+
+    The game is marked reminded before anything is sent: at most once, not at least once. A crash
+    mid-way means some fans miss one reminder, the alternative is everyone getting it twice.
+    Returns how many emails were sent.
+    """
+    categories = (await db.execute(
+        select(models.PickCategory).where(models.PickCategory.is_active)
+        .order_by(models.PickCategory.sort_order, models.PickCategory.pick_category_id),
+    )).scalars().all()
+    users = (await db.execute(
+        select(models.User).where(models.User.email_reminders).order_by(models.User.user_id),
+    )).scalars().all()
+    made = {(user_id, category_id) for user_id, category_id in await db.execute(
+        select(models.Pick.user_id, models.Pick.pick_category_id).where(models.Pick.game_id == game.game_id),
+    )}
+
+    # everything the emails need, read before the commit below so nothing has to load afterwards
+    matchup = f"{game.away_team.full_name} at {game.home_team.full_name}"
+    game_id, tipoff_utc = game.game_id, game.tipoff_utc
+    outbox = []
+    for user in users:
+        missing = [c.name for c in categories if (user.user_id, c.pick_category_id) not in made]
+        if missing: # all picks in means nothing to remind them of
+            outbox.append((user.user_id, user.email, user.username, missing))
+
+    game.reminder_sent_at = now
+    await db.commit()
+
+    sent = 0
+    for user_id, email, username, missing in outbox:
+        try:
+            await email_utils.send_pick_reminder_email(email, username, matchup, tipoff_utc, game_id, missing)
+            sent += 1
+        except Exception as err:
+            # one bad address or a hiccup at the smtp server mustn't stop the others, or the poller
+            logger.error("reminder to user %d for %s failed (%s: %s)", user_id, game_id, type(err).__name__, err)
+    return sent
+
+
 # --- the tick ---
 
 @dataclass
@@ -329,7 +393,7 @@ def watched(game: models.Game, now: datetime) -> bool:
 
 
 async def tick(db: AsyncSession, now: datetime, state: PollerState) -> int:
-    """One pass of the three jobs. Returns how many seconds to sleep before the next."""
+    """One pass of the four jobs. Returns how many seconds to sleep before the next."""
 
     # 1. the schedule, daily
     if state.schedule_due(now):
@@ -340,7 +404,17 @@ async def tick(db: AsyncSession, now: datetime, state: PollerState) -> int:
             counts = await apply_schedule(db, parse_schedule(payload, settings.team_tricode))
             logger.info("schedule: %(created)d new, %(updated)d updated, %(skipped)d skipped", counts)
 
-    # 2. live scores, only when one of our games is on or about to be
+    # 2. pick reminders, after the schedule so a moved tipoff is already known
+    upcoming = (await db.execute(
+        select(models.Game).options(*TEAM_LOADERS)
+        .where(models.Game.status == GameStatus.SCHEDULED, models.Game.reminder_sent_at.is_(None))
+        .order_by(models.Game.tipoff_utc),
+    )).scalars().all()
+    for game in upcoming:
+        if reminder_due(game, now):
+            logger.info("reminders for %s: %d sent", game.game_id, await send_reminders(db, game, now))
+
+    # 3. live scores, only when one of our games is on or about to be
     games = (await db.execute(
         select(models.Game).where(models.Game.status.in_([GameStatus.SCHEDULED, GameStatus.LIVE])),
     )).scalars().all()
@@ -351,7 +425,7 @@ async def tick(db: AsyncSession, now: datetime, state: PollerState) -> int:
             if changed:
                 logger.info("scoreboard: updated %s", ", ".join(changed))
 
-    # 3. finished games not yet scored, oldest first (see ingest_box_score for why the order matters)
+    # 4. finished games not yet scored, oldest first (see ingest_box_score for why the order matters)
     pending = (await db.execute(
         select(models.Game).options(*TEAM_LOADERS)
         .where(models.Game.status == GameStatus.FINAL, models.Game.scored_at.is_(None))
@@ -384,10 +458,16 @@ async def tick(db: AsyncSession, now: datetime, state: PollerState) -> int:
 
 
 def next_interval(open_games: list[models.Game], now: datetime) -> int:
-    """30 seconds while a game is watched, otherwise until the next one's watch starts (at most 15 minutes)."""
+    """30 seconds while a game is watched, otherwise until the next thing to do: a game's watch
+    starting, or its reminders coming due (at most 15 minutes)."""
     if any(watched(game, now) for game in open_games):
         return ACTIVE_INTERVAL
-    upcoming = [g.tipoff_utc - WATCH_BEFORE for g in open_games if g.status == GameStatus.SCHEDULED and g.tipoff_utc > now]
+    scheduled = [g for g in open_games if g.status == GameStatus.SCHEDULED and g.tipoff_utc > now]
+    upcoming = [g.tipoff_utc - WATCH_BEFORE for g in scheduled]
+    upcoming += [
+        g.tipoff_utc - reminder_lead() for g in scheduled
+        if g.reminder_sent_at is None and g.tipoff_utc - reminder_lead() > now
+    ]
     if not upcoming:
         return IDLE_INTERVAL
     until = (min(upcoming) - now).total_seconds()

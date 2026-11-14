@@ -20,7 +20,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 9 | Game chat messages | Done |
 | 10 | Reactions and moderation | Done |
 | 11 | Game-night score polling | Done (built before 9 and 10) |
-| 12 | Reminder emails | |
+| 12 | Reminder emails | Done: sent by the poller 2h before tipoff to users missing picks |
 
 Later: Docker, Postgres, Docker Compose, AWS ECS, WebSockets.
 
@@ -36,7 +36,7 @@ uv run fastapi dev main.py                 # http://localhost:8000, docs at /doc
 uv run pytest                              # needs no .env, S3 and email are faked
 ```
 
-To keep the database in step with real games (live scores, box scores and scoring when a game ends, the daily schedule refresh), run the poller in a second terminal. Run exactly one:
+To keep the database in step with real games (live scores, box scores and scoring when a game ends, the daily schedule refresh, pick reminder emails), run the poller in a second terminal. Run exactly one:
 
 ```
 uv run python poller.py           # until Ctrl+C

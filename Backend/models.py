@@ -45,6 +45,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)
     is_admin: Mapped[bool] = mapped_column(default=False) # only set with harvest_scripts/make_admin.py, never through the api
     image_file: Mapped[str | None] = mapped_column(String(200), default=None) # filename under profile_pics/ in the S3 bucket, None means the default picture
+    email_reminders: Mapped[bool] = mapped_column(default=True) # step 12's "picks lock soon" emails, opt out through PATCH /api/users/{id}
     reset_tokens: Mapped[list["PasswordResetToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
@@ -141,6 +142,10 @@ class Game(Base):
     # up by the schedule refresh), whose room is simply closed. not scored_at: an admin's forced
     # rescore moves that, and must not reopen a room
     final_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
+
+    # when the poller sent this game's pick reminders (step 12), so a restart never sends them twice.
+    # cleared if the schedule moves the tipoff, so a rescheduled game gets reminded for its new date
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, default=None)
 
     # two foreign keys point at the same table, so each relationship has to say which one it follows
     home_team: Mapped["Team"] = relationship(foreign_keys=[home_team_id])
