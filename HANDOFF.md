@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 at the end of step 15. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 while building step 16. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
@@ -95,6 +95,18 @@ Written 2026-11-12, updated 2026-11-14 at the end of step 15. Read this with `RE
 - **No source bind mount or `--reload`.** Compose runs the image as it will be deployed; day-to-day coding stays on `uv run fastapi dev` with only `db` from Compose.
 - CI tests the Compose file itself (`compose` job): db, migrate exit 0, seed as a one-off `run`, api healthy, a poller tick on the live CDN, data surviving `down`/`up`, clean SIGTERM stops.
 
+**AWS ECS (step 16), decided by Anthony: a load balancer (not a public IP on the task) and Terraform (not console clicks or CLI scripts).** Anthony's account is on AWS's Free plan: $100 of credits, about 6 months, no charges but the account is suspended when either runs out; upgrading to the Paid plan keeps it alive. Everything in `infra/` is shaped by that budget:
+- **No NAT gateway** (≈ $33/month): tasks run in public subnets with public IPs for outbound traffic only, the `app` security group admits nothing but port 8000 from the ALB, and RDS sits in private subnets with no route in or out.
+- **`running = false`** (written by `pause.sh` to `running.auto.tfvars`) removes the ALB, target group, listener and both services; `pause.sh` also stops RDS. Paused costs ≈ $3–5/month, running ≈ $60–70. The ALB gets a new DNS name on every resume; CloudFront or a domain would fix that, decided at the frontend step (HTTPS is needed there anyway).
+- **The poller service never overlaps itself**: `deployment_maximum_percent = 100`, minimum 0. The api rolls the safe way (200/100). Both have the circuit breaker with rollback.
+- **Migrations as a one-off task** (`task.sh`, the `migrate` task definition with an overridable command), run by `deploy.sh` after pointing the task definitions at the new image (`-target`) and before rolling the services.
+- **Image tag = git commit**, remembered in `image.auto.tfvars`. ECR keeps 10 images.
+- **One Secrets Manager secret** with JSON keys (SECRET_KEY, DATABASE_URL, MAIL_USERNAME, MAIL_PASSWORD), injected by the execution role; the task role grants S3 put/delete on `profile_pics/*` of the hand-made bucket (`raptors-pick-em-anthony`, us-east-2), so no access keys on AWS.
+- **Budget alert** excluding credits, so it warns while credits remain. Log groups keep 14 days.
+- **`terraform destroy` deletes the database without a final snapshot** (demo data; pause is the off switch).
+- My workspace can't download Terraform or providers, so `infra-ci.yml` runs fmt, validate and shellcheck on GitHub; it passed first time (AWS provider 6.73.0, random 3.9.1). `plan`/`apply` need Anthony's credentials and run on his machine. The scripts set `MSYS_NO_PATHCONV=1` because Git Bash rewrites `/ecs/...` arguments into Windows paths.
+- Not verified yet: whether every service used is open to a Free plan account, and whether the NBA CDN accepts AWS IPs as it accepts GitHub's (the poller's log on the first deploy answers that).
+
 ## Design agreed for later steps
 
 Worked out in discussion and should be followed unless there's a reason to change. Pick categories (step 5) are now built as described; the rest is not built yet.
@@ -154,5 +166,5 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 The backend is complete and runs itself. What's left:
 
-- **ECS** (step 16). Docker, Postgres and Compose are done. Next: the image in ECR, the api and poller as two ECS Fargate services (api behind a load balancer, poller desired count 1), `migrate` as a one-off task before each deploy, Postgres on RDS in private subnets, secrets in Secrets Manager.
+- **Step 16's first deploy**, by Anthony following `infra/README.md`; then a GitHub Action that deploys on push could follow.
 - **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).

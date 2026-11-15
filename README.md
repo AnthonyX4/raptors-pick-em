@@ -24,7 +24,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 13 | Docker image | Done: one image runs both the API and the poller, built and smoke-tested in CI |
 | 14 | Postgres and Alembic | Done: asyncpg, migrations checked in CI, tests run on Postgres |
 | 15 | Docker Compose (api, poller, Postgres) | Done: `docker compose up` runs db, migrations, api and poller; tested in CI |
-| 16 | AWS ECS (two services, RDS) | |
+| 16 | AWS ECS (two services, RDS) | Written and validated in `infra/` (Terraform); first deploy pending |
 
 Later: the React frontend, WebSockets.
 
@@ -106,6 +106,10 @@ docker compose run --rm --no-deps api python harvest_scripts/seed.py
 ```
 
 Run the app either this way or with `uv run`, not both at once: they'd both want port 8000, and there must only ever be one poller. `docker compose up -d db` alone gives `uv run` its database.
+
+### On AWS
+
+`infra/` deploys the same setup to AWS ECS with Terraform: RDS Postgres, the API behind a load balancer, the poller, migrations as a one-off task. `infra/README.md` has the first-time setup, `./deploy.sh`, and `./pause.sh` / `./resume.sh` to keep costs down between demos.
 
 To refresh the season's data from scratch (rosters included), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
 

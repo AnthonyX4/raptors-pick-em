@@ -22,6 +22,7 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 - Verify the real bucket: `uv run check_s3.py`.
 - Poller: `uv run python poller.py` (or `--once`). A separate process from the api; run exactly one.
 - Docker: `docker compose up -d --build` from the repo root runs `db`, a one-shot `migrate` (`alembic upgrade head`), then `api` (health check on `/health`) and `poller`, all from one image (`Backend/Dockerfile`: the api by default, other commands for the rest). No data in the image: secrets from `Backend/.env` via `env_file`, and Compose overrides `DATABASE_URL` to `db:5432`. Seed a fresh volume with `docker compose run --rm --no-deps api python harvest_scripts/seed.py`. Don't run the Compose api/poller and `uv run` ones at the same time (one port 8000, exactly one poller). `.github/workflows/backend-ci.yml` checks the migrations, runs the tests on Postgres and brings the Compose file up on every backend push.
+- AWS: `infra/` is Terraform for ECS Fargate (api behind an ALB, poller, migrate task), RDS Postgres 17, ECR, Secrets Manager, IAM roles, budget alert. Run from Git Bash in `infra/`: `./deploy.sh` (build, push to ECR, migrate as a one-off task, roll services), `./task.sh <cmd>` (one-off command on AWS), `./pause.sh` / `./resume.sh` (`running = false` removes the ALB and services, and the DB is stopped). `infra/README.md` has first-time setup and costs. State is local and gitignored; `.terraform.lock.hcl` is committed. `.github/workflows/infra-ci.yml` runs fmt, validate and shellcheck.
 - Old SQLite data: `uv run python harvest_scripts/copy_sqlite_to_postgres.py raptors.db` copies a pre-step-14 database into an empty migrated Postgres, ids and sequences intact.
 - `.github/workflows/capture-nba-samples.yml` saves real cdn payloads (also printed into the job log, since artifact downloads may be unreachable); `poller-smoke.yml` runs the real poller once against the live cdn on a fresh seeded database. Both manual.
 - Load NBA data: `uv run python harvest_scripts/seed.py` (reads the committed `nba_data.json`). Refresh it with `harvest_scripts/harvest.py`, which only works off-cloud.
@@ -57,6 +58,8 @@ Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat l
 What goes with the account: picks (cascade, `User.picks`), likes and any mute. What stays: chat messages, with `user_id` set to None, which the API returns as `author: null` and the frontend shows as "[deleted]", so conversations still read. All done in `delete_user_account`. Don't reintroduce `deleted_at` by reflex.
 
 ## Conventions
+
+- AWS changes go in `infra/*.tf`, never by hand in the console (except the profile picture bucket and the IAM users, which predate it). Keep the poller service's `deployment_maximum_percent = 100`: two pollers would double-send reminders.
 
 - Handlers and dependencies are `async def`; inject the session with `Annotated[AsyncSession, Depends(get_db)]` and `await` `execute`/`commit`/`refresh`/`flush`/`delete` (`db.add` is not awaited).
 - New resources get their own file under `routers/`, with the prefix and tag set in `main.py`.
