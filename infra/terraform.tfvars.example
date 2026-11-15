@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (gitignored) and fill in. These are the values Terraform can't make up itself.
+
+profile_pics_bucket = "raptors-pick-em-anthony"
+budget_email        = "you@example.com"
+
+# the same Mailtrap sandbox credentials as Backend/.env (MAIL_USERNAME / MAIL_PASSWORD)
+mail_username = ""
+mail_password = ""
+
+# optional, defaults in variables.tf:
+# monthly_budget_usd = 30
+# frontend_url       = "http://localhost:5173"   # once the react app is deployed, its address
+# api_desired_count  = 1

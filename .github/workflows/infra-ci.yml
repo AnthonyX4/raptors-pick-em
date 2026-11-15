@@ -1,0 +1,41 @@
+# Checks infra/ on every push that touches it, without an aws account: the terraform is formatted and
+# valid (every resource and argument exists, every reference resolves), and the deploy scripts pass
+# shellcheck. Nothing is created; `terraform plan` needs real aws credentials, so it runs on your machine.
+name: Infra CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - run: terraform version
+
+      - name: Formatted
+        run: terraform fmt -check -diff -recursive
+
+      - name: Providers, pinned for every platform (Windows included)
+        run: |
+          terraform init -backend=false -input=false
+          terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
+          git diff --exit-code .terraform.lock.hcl || { echo "::warning::.terraform.lock.hcl is new or changed, commit this:"; cat .terraform.lock.hcl; }
+
+      - name: Valid
+        run: terraform validate
+
+      - name: Deploy scripts pass shellcheck
+        run: shellcheck task.sh deploy.sh pause.sh resume.sh
