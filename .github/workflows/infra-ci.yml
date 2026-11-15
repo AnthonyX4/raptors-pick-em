@@ -32,7 +32,11 @@ jobs:
         run: |
           terraform init -backend=false -input=false
           terraform providers lock -platform=windows_amd64 -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
-          git diff --exit-code .terraform.lock.hcl || { echo "::warning::.terraform.lock.hcl is new or changed, commit this:"; cat .terraform.lock.hcl; }
+          # a new or changed lock file means the committed one is out of date: print it to copy in
+          if ! git ls-files --error-unmatch .terraform.lock.hcl >/dev/null 2>&1 || ! git diff --quiet .terraform.lock.hcl; then
+            echo "::warning::.terraform.lock.hcl is new or changed, commit the version printed below"
+            echo "----- BEGIN LOCK -----"; cat .terraform.lock.hcl; echo "----- END LOCK -----"
+          fi
 
       - name: Valid
         run: terraform validate
