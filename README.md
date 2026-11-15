@@ -23,7 +23,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 12 | Reminder emails | Done: sent by the poller 2h before tipoff to users missing picks |
 | 13 | Docker image | Done: one image runs both the API and the poller, built and smoke-tested in CI |
 | 14 | Postgres and Alembic | Done: asyncpg, migrations checked in CI, tests run on Postgres |
-| 15 | Docker Compose (api, poller, Postgres) | |
+| 15 | Docker Compose (api, poller, Postgres) | Done: `docker compose up` runs db, migrations, api and poller; tested in CI |
 | 16 | AWS ECS (two services, RDS) | |
 
 Later: the React frontend, WebSockets.
@@ -32,13 +32,14 @@ Later: the React frontend, WebSockets.
 
 All commands run from `Backend/`. You need [uv](https://docs.astral.sh/uv/) and [Docker Desktop](https://www.docker.com/products/docker-desktop/) (for Postgres).
 
-Start Postgres in a container. The data lives on the `raptors-pgdata` volume, so it survives the container being stopped or removed. It listens on port 5433 on your machine, so it can sit next to another Postgres on 5432:
+Postgres runs in Docker, defined in `docker-compose.yml` at the repo root. Its data lives on the `raptors-pgdata` volume, so it survives the container being stopped or removed. It listens on port 5433 on your machine, so it can sit next to another Postgres on 5432. From the repo root:
 
 ```
-docker run -d --name raptors-db -p 5433:5432 -v raptors-pgdata:/var/lib/postgresql/data -e POSTGRES_USER=raptors -e POSTGRES_PASSWORD=raptors -e POSTGRES_DB=raptors postgres:17
+docker compose up -d db      # just the database, for running the app with uv (below)
+docker compose stop db       # stop it, the data stays
 ```
 
-After that, `docker start raptors-db` / `docker stop raptors-db` is all it needs. Then:
+Then, from `Backend/`:
 
 ```
 uv sync
@@ -72,7 +73,7 @@ uv run alembic check                                         # fails if the mode
 `uv run pytest` uses a throwaway SQLite file by default. CI runs the same suite on Postgres, and so can you, against a database made only for tests (every test drops all its tables):
 
 ```
-docker exec raptors-db createdb -U raptors raptors_test
+docker compose exec db createdb -U raptors raptors_test
 TEST_DATABASE_URL=postgresql+asyncpg://raptors:raptors@localhost:5433/raptors_test uv run pytest
 ```
 
@@ -87,25 +88,24 @@ uv run alembic upgrade head
 uv run python harvest_scripts/copy_sqlite_to_postgres.py raptors.db
 ```
 
-### With Docker
+### Everything in Docker (Compose)
 
-The same image runs the API, the poller and the migrations. Build it from the repo root:
-
-```
-docker build -t raptors-pick-em Backend
-```
-
-Containers reach each other by name on a shared Docker network, so inside it Postgres is `raptors-db:5432`, not `localhost:5433`. Secrets come from your `.env` at run time and are never built into the image; `-e` overrides its `DATABASE_URL` for the network:
+`docker-compose.yml` runs the whole backend from one image: Postgres, a one-shot `migrate` service that runs `alembic upgrade head`, then the API and the poller, which only start once the migration succeeded. Secrets come from `Backend/.env` at run time (never built into the image); Compose swaps its `DATABASE_URL` for the `db` service's address. From the repo root:
 
 ```
-docker network create raptors
-docker network connect raptors raptors-db
-docker run --rm --network raptors --env-file Backend/.env -e DATABASE_URL=postgresql+asyncpg://raptors:raptors@raptors-db:5432/raptors raptors-pick-em alembic upgrade head
-docker run -d --name api --network raptors --env-file Backend/.env -e DATABASE_URL=postgresql+asyncpg://raptors:raptors@raptors-db:5432/raptors -p 8000:8000 raptors-pick-em
-docker run -d --name poller --network raptors --env-file Backend/.env -e DATABASE_URL=postgresql+asyncpg://raptors:raptors@raptors-db:5432/raptors raptors-pick-em python poller.py
+docker compose up -d --build     # build the image and start everything: http://localhost:8000/docs
+docker compose ps                # db and api should say (healthy), migrate "Exited (0)"
+docker compose logs -f poller    # follow a service's output
+docker compose down              # stop and remove the containers, the data stays on the volume
 ```
 
-`docker logs -f api` follows a container's output, `docker stop api poller` stops them (cleanly, on SIGTERM), and `docker rm api poller` removes them; the data stays in Postgres. `GET /health` reports whether the API can reach its database. Step 15 replaces these commands with one `docker compose up`.
+On a brand new volume, seed once the API is up (the poller retries until there's data):
+
+```
+docker compose run --rm --no-deps api python harvest_scripts/seed.py
+```
+
+Run the app either this way or with `uv run`, not both at once: they'd both want port 8000, and there must only ever be one poller. `docker compose up -d db` alone gives `uv run` its database.
 
 To refresh the season's data from scratch (rosters included), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
 

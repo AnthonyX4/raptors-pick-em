@@ -1,10 +1,10 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 at the end of step 14. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 at the end of step 15. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
-- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image, step 14 moved it to Postgres with Alembic migrations. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
+- Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image, step 14 moved it to Postgres with Alembic migrations, step 15 runs it all with Docker Compose. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
 - 298 tests pass on SQLite and on Postgres (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
@@ -88,6 +88,13 @@ Written 2026-11-12, updated 2026-11-14 at the end of step 14. Read this with `RE
 - **Local Postgres on port 5433** (`raptors-db` container, `raptors-pgdata` volume), because the sneaker store's container already holds 5432. CI and the docs use `postgres:17`.
 - `copy_sqlite_to_postgres.py` moved Anthony's `raptors.db` across (tested on a copy of it: 2 users, 2 picks, 80 games, 338 box score lines), then moves each id sequence past the largest copied id so the next signup doesn't collide.
 
+**Docker Compose (step 15), building on eagl.ai's Compose file.** Four services from one image plus Postgres: `db` (named volume, `pg_isready` health check), `migrate` (one-shot `alembic upgrade head`, `depends_on: db: service_healthy`), then `api` and `poller`, both `depends_on: migrate: service_completed_successfully`. The `api` health check is `GET /health` through python's urllib (the slim image has no curl). Differences from eagl.ai, and why:
+- **Secrets aren't written into the file.** `env_file: Backend/.env`; Compose's `environment` overrides only `DATABASE_URL`, to `db:5432`. So the same `.env` serves `uv run` (localhost:5433) and Compose. The Postgres credentials are `${POSTGRES_USER:-raptors}`-style variables with local defaults.
+- **Migrations are their own service**, not a Makefile command run by hand: the api can't start on an old schema, and it's the same shape as the one-off ECS task step 16 needs.
+- **The volume is named `raptors-pgdata` explicitly**, the same one the standalone `raptors-db` container used in step 14, so moving to Compose kept Anthony's data. Compose warns that the volume "already exists but was not created by Docker Compose"; that's expected.
+- **No source bind mount or `--reload`.** Compose runs the image as it will be deployed; day-to-day coding stays on `uv run fastapi dev` with only `db` from Compose.
+- CI tests the Compose file itself (`compose` job): db, migrate exit 0, seed as a one-off `run`, api healthy, a poller tick on the live CDN, data surviving `down`/`up`, clean SIGTERM stops.
+
 ## Design agreed for later steps
 
 Worked out in discussion and should be followed unless there's a reason to change. Pick categories (step 5) are now built as described; the rest is not built yet.
@@ -147,5 +154,5 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 The backend is complete and runs itself. What's left:
 
-- **Compose, then ECS** (steps 15 and 16). Docker and Postgres are done. Next: one `docker compose up` for Postgres (named volume, health check), a one-shot `migrate` service, then the api and poller once it has succeeded; then the api and poller as two ECS services, migrations as a one-off task, Postgres on RDS.
+- **ECS** (step 16). Docker, Postgres and Compose are done. Next: the image in ECR, the api and poller as two ECS Fargate services (api behind a load balancer, poller desired count 1), `migrate` as a one-off task before each deploy, Postgres on RDS in private subnets, secrets in Secrets Manager.
 - **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).
