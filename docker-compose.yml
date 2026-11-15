@@ -1,0 +1,87 @@
+# The whole backend with one command, from the repo root:
+#
+#   docker compose up -d --build     # build the image, start everything (api on http://localhost:8000)
+#   docker compose logs -f api       # follow one service (or poller, db, migrate)
+#   docker compose down              # stop and remove the containers, the database volume stays
+#
+# Four services, started in this order:
+#   db       postgres, its data on the raptors-pgdata volume
+#   migrate  runs `alembic upgrade head` once the database answers, then exits
+#   api      starts only after migrate succeeded, healthy once GET /health passes
+#   poller   same condition, exactly one
+#
+# The same image runs migrate, api and poller with different commands, like ECS will.
+name: raptors-pick-em
+
+# postgres credentials, local only (ecs uses rds with secrets manager). override them in a .env next to
+# this file if you want; the defaults match the raptors-db container from the README
+x-db-env: &db-env
+  POSTGRES_USER: ${POSTGRES_USER:-raptors}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-raptors}
+  POSTGRES_DB: ${POSTGRES_DB:-raptors}
+
+# what migrate, api and poller share: the image, the app's secrets from Backend/.env, and a
+# DATABASE_URL pointing at the db service. `environment` wins over env_file, so the localhost:5433
+# url in Backend/.env (right for `uv run` on your machine) is replaced by db:5432 (right inside compose)
+x-app: &app
+  build: ./Backend
+  image: raptors-pick-em:local
+  env_file: Backend/.env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-raptors}:${POSTGRES_PASSWORD:-raptors}@db:5432/${POSTGRES_DB:-raptors}
+
+services:
+  db:
+    image: postgres:17
+    environment: *db-env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # published on 5433 so `uv run` on your machine (and VS Code) reach the same database.
+    # 5433 rather than 5432 so it can run next to the sneaker store's postgres
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+  migrate:
+    <<: *app
+    command: alembic upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no" # a one-shot job: brings the schema up to date, then exits 0
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # the image has no curl, python is enough. /health runs a query, so healthy means "can serve"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  poller:
+    <<: *app
+    command: python poller.py
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 30s # a stop lets the tick in progress finish (poller.py handles SIGTERM)
+
+volumes:
+  pgdata:
+    # a fixed name rather than compose's default (raptors-pick-em_pgdata): the same volume the standalone
+    # raptors-db container used, so switching to compose keeps the data
+    name: raptors-pgdata

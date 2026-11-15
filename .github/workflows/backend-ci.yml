@@ -1,7 +1,7 @@
 # Runs on every push to main that touches the backend:
 #   - tests: migrations applied to an empty postgres, checked against the models, undone and reapplied;
 #     then the whole suite on postgres, the database production runs
-#   - docker: the image built and run the way it will be deployed, next to a postgres container
+#   - compose: docker-compose.yml brought up as you'd run it: db, migrate, api, poller
 name: Backend CI
 
 on:
@@ -9,11 +9,9 @@ on:
     branches: [main]
     paths:
       - "Backend/**"
+      - "docker-compose.yml"
       - ".github/workflows/backend-ci.yml"
   workflow_dispatch:
-
-env:
-  POSTGRES_IMAGE: postgres:17
 
 jobs:
   tests:
@@ -58,43 +56,40 @@ jobs:
           psql -h localhost -U raptors -d raptors -c "CREATE DATABASE raptors_test"
           uv run pytest -q -p no:warnings
 
-  docker:
+  compose:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      # the shape of a real Backend/.env; compose replaces its DATABASE_URL with the db service's
+      - name: A throwaway Backend/.env
+        run: |
+          printf 'SECRET_KEY=ci-only-not-a-real-secret-key-0123456789\nS3_BUCKET_NAME=ci-bucket\nDATABASE_URL=postgresql+asyncpg://raptors:raptors@localhost:5433/raptors\n' > Backend/.env
+
       - name: Build the image
-        run: docker build -t raptors-pick-em Backend
+        run: docker compose build
 
       - name: What's in it
         run: |
           docker image ls raptors-pick-em
-          echo "runs as: $(docker run --rm raptors-pick-em id)"
-          echo "/app holds:"; docker run --rm raptors-pick-em ls -A /app
-          docker run --rm raptors-pick-em python -c "import fastapi, nba_api, PIL, argon2, asyncpg, alembic; print('imports ok')"
+          echo "runs as: $(docker run --rm raptors-pick-em:local id)"
+          echo "/app holds:"; docker run --rm raptors-pick-em:local ls -A /app
+          docker run --rm raptors-pick-em:local python -c "import fastapi, nba_api, PIL, argon2, asyncpg, alembic; print('imports ok')"
 
-      # containers on one network reach each other by name: the api finds postgres at db:5432
-      - name: Postgres on a network, its data on a named volume
+      # api pulls in db and migrate through depends_on; the poller waits until there's data to poll
+      - name: Start db, migrate and api
         run: |
-          docker network create raptors
-          docker run -d --name db --network raptors -v raptors-pgdata:/var/lib/postgresql/data \
-            -e POSTGRES_USER=raptors -e POSTGRES_PASSWORD=raptors -e POSTGRES_DB=raptors $POSTGRES_IMAGE
-          for i in $(seq 1 30); do docker exec db pg_isready -U raptors && break; sleep 1; done
+          docker compose up -d api
+          for i in $(seq 1 60); do curl -fsS localhost:8000/health && echo && break; sleep 1; done
+          docker compose ps -a
 
-      # the same shape as a real .env, passed in at run time, never built into the image
-      - name: A throwaway env file
+      - name: Migrate ran once and exited 0
         run: |
-          printf 'SECRET_KEY=ci-only-not-a-real-secret-key-0123456789\nS3_BUCKET_NAME=ci-bucket\nDATABASE_URL=postgresql+asyncpg://raptors:raptors@db:5432/raptors\n' > ci.env
+          docker compose ps -a migrate --format '{{.Service}} {{.State}} {{.ExitCode}}'
+          docker compose logs migrate | grep "Running upgrade"
 
-      - name: Migrate and seed, from the image
-        run: |
-          docker run --rm --network raptors --env-file ci.env raptors-pick-em alembic upgrade head
-          docker run --rm --network raptors --env-file ci.env raptors-pick-em python harvest_scripts/seed.py
-
-      - name: Start the API
-        run: |
-          docker run -d --name api --network raptors --env-file ci.env -p 8000:8000 raptors-pick-em
-          for i in $(seq 1 30); do curl -fsS localhost:8000/health && echo && break; sleep 1; done
+      - name: Seed, as a one-off container
+        run: docker compose run --rm --no-deps api python harvest_scripts/seed.py
 
       - name: Smoke test the API
         run: |
@@ -106,28 +101,37 @@ jobs:
           echo "--- pick categories"
           curl -fsS localhost:8000/api/pick-categories | python3 -c "import json,sys; print([c['key'] for c in json.load(sys.stdin)])"
 
-      - name: The poller, one pass, from the same image
-        run: docker run --rm --network raptors --env-file ci.env raptors-pick-em python poller.py --once
+      - name: Start the poller and let it run a tick against the live CDN
+        run: |
+          docker compose up -d poller
+          for i in $(seq 1 60); do docker compose logs poller | grep -q "scored\|schedule:" && break; sleep 1; done
+          sleep 5
+          docker compose logs poller
 
       - name: The API saw the poller's writes (same database)
         run: curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games')"
 
-      - name: Postgres keeps its data when its container is replaced
+      - name: The api reports healthy to compose
+        run: docker compose ps api --format '{{.Service}} {{.Status}}'
+
+      - name: Data survives docker compose down and up
         run: |
-          docker rm -f db
-          docker run -d --name db --network raptors -v raptors-pgdata:/var/lib/postgresql/data $POSTGRES_IMAGE
-          for i in $(seq 1 30); do docker exec db pg_isready -U raptors && break; sleep 1; done
-          sleep 2
-          curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games after the database container was recreated')"
+          docker compose down
+          docker compose up -d
+          for i in $(seq 1 60); do curl -fsS localhost:8000/health >/dev/null && break; sleep 1; done
+          curl -fsS "localhost:8000/api/games?status=final&limit=1" | python3 -c "import json,sys; p=json.load(sys.stdin); print(p['total'], 'final games after down and up')"
 
       - name: Stops cleanly on SIGTERM
         run: |
-          docker stop api
-          docker inspect api --format 'exit code {{.State.ExitCode}}'
-          docker logs api 2>&1 | tail -n 5
+          docker compose stop api poller
+          docker compose ps -a api poller --format '{{.Service}} {{.State}} exit {{.ExitCode}}'
+          docker compose logs api | tail -n 3
+          docker compose logs poller | tail -n 2
 
       - name: Logs
         if: failure()
-        run: |
-          docker logs api || true
-          docker logs db || true
+        run: docker compose logs
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
