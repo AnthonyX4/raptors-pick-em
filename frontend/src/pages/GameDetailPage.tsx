@@ -1,12 +1,12 @@
 import { Link, useParams } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api-client"
+import { ChatRoom } from "@/features/chat/components/ChatRoom"
 import { GamePicks } from "@/features/picks/components/GamePicks"
 import { BoxScore } from "@/features/games/components/BoxScore"
 import { GameHeader } from "@/features/games/components/GameHeader"
 import { useGame } from "@/features/games/hooks"
 
-// chat (16.5) will sit beside the game and its picks
 export function GameDetailPage() {
   const { gameId = "" } = useParams()
   const { data: game, isPending, error } = useGame(gameId)
@@ -38,10 +38,16 @@ export function GameDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-10">
-      <GameHeader game={game} />
-      <GamePicks game={game} />
-      <BoxScore game={game} />
+    // the game and its picks on the left, the chat beside them; below lg the chat follows them
+    <div className="mx-auto grid max-w-7xl grid-cols-[minmax(0,1fr)_26rem] items-start gap-10 max-lg:grid-cols-1">
+      <div className="space-y-10">
+        <GameHeader game={game} />
+        <GamePicks game={game} />
+        <BoxScore game={game} />
+      </div>
+      <aside className="sticky top-6 max-lg:static">
+        <ChatRoom gameId={game.game_id} />
+      </aside>
     </div>
   )
 }

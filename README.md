@@ -30,7 +30,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 16.2 | Auth: login, register, forgot and reset password, protected routes | Done |
 | 16.3 | Games: schedule, game page with live score, box score, home page | Done |
 | 16.4 | Picks: form built from the categories, locked and scored states, everyone's picks after tipoff | Done |
-| 16.5 | Chat: polling, scroll back, post, edit, delete, like, admin moderation | |
+| 16.5 | Chat: polling, scroll back, post, edit, delete, like, admin moderation | Done |
 | 16.6 | Leaderboards | |
 | 16.7 | Profile and settings | |
 | 16.8 | Frontend in Docker (nginx) and Compose | |
