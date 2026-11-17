@@ -26,7 +26,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 15 | Docker Compose (api, poller, Postgres) | Done: `docker compose up` runs db, migrations, api and poller; tested in CI |
 | 16 | React frontend (design and build order in `frontend/SPEC.md`) | In progress |
 | 16.0 | Backend prep: 7-day tokens, `is_admin` on `/me`, `editable_until` on chat messages | Done |
-| 16.1 | Scaffold: Vite + TypeScript, Tailwind, shadcn, React Router, TanStack Query, dev proxy, generated API types | |
+| 16.1 | Scaffold: Vite + TypeScript, Tailwind, shadcn, React Router, TanStack Query, dev proxy, generated API types | Done |
 | 16.2 | Auth: login, register, forgot and reset password, protected routes | |
 | 16.3 | Games: schedule, game page with live score, box score, home page | |
 | 16.4 | Picks: form built from the categories, locked and scored states, everyone's picks after tipoff | |
