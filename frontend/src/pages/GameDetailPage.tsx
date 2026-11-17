@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api-client"
 import { ChatRoom } from "@/features/chat/components/ChatRoom"
+import { GameLeaderboard } from "@/features/leaderboard/components/GameLeaderboard"
 import { GamePicks } from "@/features/picks/components/GamePicks"
 import { BoxScore } from "@/features/games/components/BoxScore"
 import { GameHeader } from "@/features/games/components/GameHeader"
@@ -43,6 +44,7 @@ export function GameDetailPage() {
       <div className="space-y-10">
         <GameHeader game={game} />
         <GamePicks game={game} />
+        {game.status === "final" && <GameLeaderboard gameId={game.game_id} />}
         <BoxScore game={game} />
       </div>
       <aside className="sticky top-6 max-lg:static">
