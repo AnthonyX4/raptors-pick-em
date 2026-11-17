@@ -1,6 +1,8 @@
 import { Link, NavLink, Outlet } from "react-router"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
+import { UserMenu } from "@/features/auth/components/UserMenu"
+import { useAuth } from "@/features/auth/useAuth"
 import { cn } from "@/lib/utils"
 
 const links = [
@@ -17,6 +19,8 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   )
 
 export function AppShell() {
+  const { user, isLoading } = useAuth()
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="bg-black">
@@ -33,14 +37,20 @@ export function AppShell() {
               </li>
             ))}
           </ul>
-          {/* the account area becomes a user menu once auth exists (16.2) */}
+          {/* empty while a stored token is being checked, so "Log in" doesn't flash for a logged-in person */}
           <div className="ml-auto flex items-center gap-6">
-            <NavLink to="/login" className={navLinkClass}>
-              Log in
-            </NavLink>
-            <Button asChild size="sm" className="font-bold uppercase tracking-wide">
-              <Link to="/register">Sign up</Link>
-            </Button>
+            {isLoading ? null : user ? (
+              <UserMenu user={user} />
+            ) : (
+              <>
+                <NavLink to="/login" className={navLinkClass}>
+                  Log in
+                </NavLink>
+                <Button asChild size="sm" className="font-bold uppercase tracking-wide">
+                  <Link to="/register">Sign up</Link>
+                </Button>
+              </>
+            )}
           </div>
         </nav>
         {/* the links drop below the logo on a phone instead of a menu: three links fit */}

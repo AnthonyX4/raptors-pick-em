@@ -1,5 +1,6 @@
 import { createBrowserRouter } from "react-router"
 import { AppShell } from "@/components/layout/AppShell"
+import { ProtectedRoute } from "@/components/layout/ProtectedRoute"
 import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage"
 import { GameDetailPage } from "@/pages/GameDetailPage"
 import { GamesPage } from "@/pages/GamesPage"
@@ -22,7 +23,7 @@ export const router = createBrowserRouter([
       { path: "/games/:gameId", element: <GameDetailPage /> },
       { path: "/leaderboard", element: <LeaderboardPage /> },
       { path: "/users/:userId", element: <ProfilePage /> },
-      { path: "/settings", element: <SettingsPage /> }, // becomes a ProtectedRoute in 16.2
+      { element: <ProtectedRoute />, children: [{ path: "/settings", element: <SettingsPage /> }] },
       { path: "/login", element: <LoginPage /> },
       { path: "/register", element: <RegisterPage /> },
       { path: "/forgot-password", element: <ForgotPasswordPage /> },

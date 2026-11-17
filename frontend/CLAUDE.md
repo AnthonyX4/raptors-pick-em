@@ -4,7 +4,7 @@ Guidance for Claude Code when working in `frontend/`. The root `CLAUDE.md` cover
 
 ## Status
 
-Step 16, done through 16.1 (the scaffold). Every route in `SPEC.md` exists as a placeholder page (`PlaceholderPage`) except `NotFoundPage`, which is real; the navbar's Log in / Sign up buttons are static until 16.2. `SPEC.md` has the agreed design, the API contract notes and the build order (16.0 to 16.9). Read it before starting a sub-step, and do one sub-step at a time.
+Step 16, done through 16.2 (auth). Login, register, forgot and reset password are real pages and `/settings` is behind a login; the other routes in `SPEC.md` are still placeholder pages (`PlaceholderPage`), except `NotFoundPage`. `SPEC.md` has the agreed design, the API contract notes and the build order (16.0 to 16.9). Read it before starting a sub-step, and do one sub-step at a time.
 
 When a sub-step is finished: tick it in the root `README.md` table, and add here whatever is now true about the code (commands that work, where things live, patterns in use). This file describes the code as it is; plans stay in `SPEC.md`.
 
@@ -17,17 +17,20 @@ Vite + React + TypeScript (strict), React Router (`createBrowserRouter`, library
 - Install: `npm install`
 - Dev server: `npm run dev` (http://localhost:5173). Needs the backend on port 8000: `uv run fastapi dev main.py` from `Backend/` with `docker compose up -d db`, or `docker compose up -d` for the whole backend.
 - API types: `npm run gen:api` regenerates `src/types/api.d.ts` from `http://localhost:8000/openapi.json` (backend must be running). Run it after any backend schema change. Without a running backend, export the schema from the app (`json.dump(main.app.openapi(), ...)` with dummy `SECRET_KEY`, `S3_BUCKET_NAME`, `DATABASE_URL` set) and point `npx openapi-typescript <file> -o src/types/api.d.ts` at the file.
-- Type check and lint: `npm run build` (runs `tsc -b` then `vite build`), `npm run lint` (oxlint, which the Vite template ships instead of ESLint). The one existing warning is in shadcn's generated `button.tsx`.
+- Type check and lint: `npm run build` (runs `tsc -b` then `vite build`), `npm run lint` (oxlint, which the Vite template ships instead of ESLint). The two existing warnings are in shadcn's generated `button.tsx` and `form.tsx`.
+- Tests: `npm test` (Vitest, `npm run test:watch` to watch). They cover logic without a browser: `lib/api-client.test.ts` (token, the 401 retry, error shapes, request bodies) and `features/auth/schemas.test.ts` (the form rules that mirror the backend's). Test files sit next to the code, are `*.test.ts`, run in node, and stub `fetch` and `localStorage`. There are no component tests.
 - Add a shadcn component: `npx shadcn@latest add <name>`
 
 ## Where things live
 
-- `src/main.tsx` mounts `QueryClientProvider` and `RouterProvider` (an `AuthProvider` joins them in 16.2); `src/router.tsx` is the route table; `components/layout/AppShell.tsx` is the navbar plus `<Outlet />` and the toaster.
+- `src/main.tsx` mounts `QueryClientProvider`, `AuthProvider` and `RouterProvider`; `src/router.tsx` is the route table; `components/layout/AppShell.tsx` is the navbar plus `<Outlet />` and the toaster.
 - `lib/api-client.ts`: `request()` and the `api.get/post/put/patch/delete/login/upload` helpers, `ApiError`, the token in `localStorage` (`getToken`/`setToken`/`clearToken`), and `setAuthResetHandler` for the `AuthProvider` to register on. `lib/query-client.ts` doesn't retry 4xx errors. `lib/format.ts` has the time and score helpers.
 - Generated types are read as `components["schemas"]["GameResponse"]` from `@/types/api`. The `@` alias is set in `vite.config.ts` and both tsconfigs.
 - Tooling: TypeScript is pinned to 5.9 because `openapi-typescript` crashes on TypeScript 7 (it needs the JS compiler API, which 7 no longer has). Don't bump it until `openapi-typescript` supports 7.
-- Two deliberate edits to shadcn's generated code: `lib/utils.ts` is the standard `clsx` + `tailwind-merge` `cn` (this shadcn version generated an import from an obscure `cn` npm package), and `ui/sonner.tsx` fixes `theme="dark"` instead of importing `next-themes`. Re-adding a component through the cli may bring the `cn` import back: change it to `@/lib/utils`.
+- Two deliberate edits to shadcn's generated code: `lib/utils.ts` is the standard `clsx` + `tailwind-merge` `cn` (this shadcn version generated an import from an obscure `cn` npm package), and `ui/sonner.tsx` fixes `theme="dark"` instead of importing `next-themes`. Re-adding a component through the cli brings the `cn` import back and may ask to overwrite `button.tsx` (answer no): change the import to `@/lib/utils` and `npm uninstall cn` if it was reinstalled.
 - Theme: `index.css` defines one dark palette on `:root` (no `.dark` class, no light mode). The logo red `#BD1B21` is `--primary` and `--ring`. Fonts are `@fontsource-variable/inter` (`font-sans`) and `@fontsource/barlow-condensed` (`font-display`).
+- **Auth** (`features/auth/`): `AuthProvider` keeps the user in the query cache under `["me"]` (switched on by a stored token) and exposes `useAuth()` = `{user, isLoading, login, register, logout}`; the context lives in `auth-context.ts` and the hook in `useAuth.ts` so the provider file only exports a component. `login` stores the token, fetches `/me`, then invalidates every other query (`liked_by_me` and the like change with who's reading); `logout` clears the token and the whole query cache. `register` is the POST then `login`. A 401 that the api client recovers from calls the provider's reset handler, which drops the user and shows an "expired" toast. `schemas.ts` has the zod rules for the forms (they mirror `schemas.py`; the server stays the authority and its 409/400 messages are shown), `errors.ts` turns any error into text.
+- `components/layout/ProtectedRoute.tsx` wraps `/settings`: waits for `/me`, sends a never-logged-in visitor to `/login` with `state.from`, and sends someone who had a user and lost it (logout, expiry) home. `/login` and `/register` redirect a logged-in visitor to `useReturnTo()` (the `from` state, or `/`). The navbar's account area is `UserMenu` (avatar, profile, settings, log out), empty while `isLoading`.
 - `components/MediaCard.tsx` is the tile (link, optional image, dark overlay, hover cta). `HomePage` is a stand-in of three of them until 16.3.
 
 ## Conventions
