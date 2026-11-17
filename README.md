@@ -24,7 +24,17 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 13 | Docker image | Done: one image runs both the API and the poller, built and smoke-tested in CI |
 | 14 | Postgres and Alembic | Done: asyncpg, migrations checked in CI, tests run on Postgres |
 | 15 | Docker Compose (api, poller, Postgres) | Done: `docker compose up` runs db, migrations, api and poller; tested in CI |
-| 16 | React frontend | |
+| 16 | React frontend (design and build order in `frontend/SPEC.md`) | In progress |
+| 16.0 | Backend prep: 7-day tokens, `is_admin` on `/me`, `editable_until` on chat messages | Done |
+| 16.1 | Scaffold: Vite + TypeScript, Tailwind, shadcn, React Router, TanStack Query, dev proxy, generated API types | |
+| 16.2 | Auth: login, register, forgot and reset password, protected routes | |
+| 16.3 | Games: schedule, game page with live score, box score, home page | |
+| 16.4 | Picks: form built from the categories, locked and scored states, everyone's picks after tipoff | |
+| 16.5 | Chat: polling, scroll back, post, edit, delete, like, admin moderation | |
+| 16.6 | Leaderboards | |
+| 16.7 | Profile and settings | |
+| 16.8 | Frontend in Docker (nginx) and Compose | |
+| 16.9 | Polish: loading, empty and error states, accessibility | |
 | 17 | Deploy (host to be chosen) | |
 
 Later: WebSockets for the chat.

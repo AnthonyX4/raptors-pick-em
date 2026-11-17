@@ -149,7 +149,7 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 ## Open
 
-- Frontend is untouched. The sneaker store's React app was deliberately not copied.
+- Frontend is untouched. The sneaker store's React app was deliberately not copied. The frontend's design and build order were agreed on 2026-11-17 and live in `frontend/SPEC.md`: a Vite + React + TypeScript single-page app, starting with three small backend changes (step 16.0).
 - Not decided: whether private friend leagues (step 5-8 era) are worth building, and whether reactions (step 10) are needed at all.
 
 ## Next: a choice of direction

@@ -115,6 +115,7 @@ async def to_responses(
             body=m.body,
             created_at=m.created_at,
             edited_at=m.edited_at,
+            editable_until=m.created_at + EDIT_WINDOW,
             like_count=counts.get(m.message_id, 0),
             liked_by_me=m.message_id in mine,
         )

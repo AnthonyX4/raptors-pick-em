@@ -215,6 +215,14 @@ def test_edit_within_5_minutes(client, user_headers, game, clock):
     assert response.json()["edited_at"] is not None
 
 
+def test_message_says_until_when_it_can_be_edited(client, user_headers, game):
+    # the frontend shows the edit button from this rather than redoing the 5 minute rule
+    message = posted(client, user_headers)
+    created = datetime.fromisoformat(message["created_at"])
+    assert datetime.fromisoformat(message["editable_until"]) == created + timedelta(minutes=5)
+    assert page(client)["messages"][0]["editable_until"] == message["editable_until"]
+
+
 def test_no_edits_after_5_minutes(client, user_headers, game, clock):
     message = posted(client, user_headers)
     clock(TIPOFF - timedelta(hours=2) + timedelta(minutes=5, seconds=1))

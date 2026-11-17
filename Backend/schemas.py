@@ -34,6 +34,7 @@ class UserPublic(BaseModel):
 class UserPrivate(UserPublic):
     email: EmailStr
     email_reminders: bool # only the user themselves sees their settings
+    is_admin: bool # tells the frontend to show moderation controls; only the owner sees their own, so nobody learns who else is an admin
 
 class UserUpdate(BaseModel):
     # password isn't here, it's changed through PATCH /me/password (ChangePasswordRequest)
@@ -326,6 +327,7 @@ class ChatMessageResponse(BaseModel):
     body: str
     created_at: datetime
     edited_at: datetime | None
+    editable_until: datetime # the backend owns the edit window, the frontend reads it rather than redoing the rule
     like_count: int
     liked_by_me: bool # always False for a reader who isn't logged in
 

@@ -94,6 +94,17 @@ def test_cannot_delete_an_admin(client, admin_headers):
     assert client.get("/api/users/me", headers=admin_headers).status_code == 200
 
 
+def test_users_see_only_their_own_admin_flag(client, user_headers, admin_headers):
+    # /me says whether to show moderation controls; public user responses never say who is an admin
+    assert client.get("/api/users/me", headers=admin_headers).json()["is_admin"] is True
+    me = client.get("/api/users/me", headers=user_headers).json()
+    assert me["is_admin"] is False
+    admin_id = client.get("/api/users/me", headers=admin_headers).json()["user_id"]
+    profile = client.get(f"/api/users/{admin_id}", headers=user_headers)
+    assert profile.status_code == 200
+    assert "is_admin" not in profile.json()
+
+
 def _png() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (50, 50), "red").save(buffer, "PNG")

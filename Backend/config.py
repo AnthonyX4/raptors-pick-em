@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     secret_key: SecretStr # this type displays *** instead of actual value when printing or logging
     algorithm: str = "HS256" # default value
-    access_token_expire_minutes: int = 30 # default value
+    access_token_expire_minutes: int = 60 * 24 * 7 # a week: there's no refresh token, and 30 minutes logged people out mid-game
 
     max_upload_size_bytes: int = 5 * 1024 * 1024 # 5MB, profile picture uploads larger than this are rejected
 

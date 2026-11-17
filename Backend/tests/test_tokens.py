@@ -1,3 +1,8 @@
+from datetime import datetime, timedelta, UTC
+
+import jwt
+
+from config import settings
 from conftest import register_and_login
 
 # a token carries only the user id ({"sub": "<user_id>"}) and stays validly signed until it expires,
@@ -27,3 +32,12 @@ def test_a_new_account_never_inherits_a_deleted_users_id(client, user_headers):
 
     assert me(client, newcomer_headers)["user_id"] != deleted_id
     assert client.get("/api/users/me", headers=user_headers).status_code == 401 # the old token still reaches nobody
+
+
+def test_token_lasts_a_week(client):
+    # no refresh token, so a short lifetime logged people out mid-game
+    headers = register_and_login(client, "fan@example.com")
+    token = headers["Authorization"].removeprefix("Bearer ")
+    claims = jwt.decode(token, settings.secret_key.get_secret_value(), algorithms=[settings.algorithm])
+    expires = datetime.fromtimestamp(claims["exp"], UTC)
+    assert abs(expires - (datetime.now(UTC) + timedelta(days=7))) < timedelta(minutes=1)
