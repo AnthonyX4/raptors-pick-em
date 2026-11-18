@@ -1,11 +1,12 @@
 # Handoff
 
-Written 2026-11-12, updated 2026-11-14 after setting the AWS deploy aside. Read this with `README.md` (the step plan) and `CLAUDE.md` (conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
+Written 2026-11-12, updated 2026-11-14 after setting the AWS deploy aside, and 2026-11-18 once the frontend was done and WebSockets for the chat became step 17. Read this with `README.md` (the step plan) and the `CLAUDE.md` files (the root one, `Backend/CLAUDE.md`, `frontend/CLAUDE.md`: conventions and architecture). This file holds what those two don't: the decisions already made and why, the design agreed for steps not yet built, and what's still open.
 
 ## Where things stand
 
 - Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image, step 14 moved it to Postgres with Alembic migrations, step 15 runs it all with Docker Compose. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
-- 298 tests pass on SQLite and on Postgres (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
+- Step 16, the React frontend, is done (16.0 to 16.9): every page in `frontend/SPEC.md` is real, and Compose serves it on port 8080. The chat polls; step 17 adds WebSockets to it (design below). Deploying is now step 18.
+- 298 backend tests passed on SQLite and on Postgres at the end of step 15 (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
 - The admin scoring endpoint stays as the manual re-run, e.g. `?force=true` after the NBA corrects a stat.
@@ -115,13 +116,53 @@ Worked out in discussion and should be followed unless there's a reason to chang
 
 **Chat uses cursor pagination**, `?before=<message_id>&limit=50`, not `skip`/`limit`. New messages shift every offset, so offset paging repeats rows in a live feed. Games and leaderboards keep `skip`/`limit`.
 
-**Polling before WebSockets.** Build chat and live scores on plain REST with the browser re-requesting on a timer; it is a complete, testable feature. Add WebSockets afterwards as an upgrade, keeping `POST` for sending. Once more than one backend container runs, a message posted to container A won't reach clients on container B, which is where Redis pub/sub earns its place.
+**Polling before WebSockets** (followed). Chat and live scores were built on plain REST with the browser re-requesting on a timer, a complete, testable feature. WebSockets come afterwards as an upgrade for the chat only (step 17, below), keeping `POST` for sending.
 
 **The poller is a separate process** (step 11, built). Not a task in the api's lifespan, so two api containers can't mean two pollers racing. On ECS it becomes its own service with a desired count of 1; in Docker Compose, a second service from the same image with `command: python poller.py`.
 
 **The poller does four jobs** (built). A daily schedule refresh (new NBA Cup games, moved tipoffs, postponed games going back to scheduled, which reopens their picks, and final scores for any game it missed entirely); pick reminder emails before tipoff (step 12); live scores for games on or about to start; box scores and scoring for finished games. It moves `Player.team_id` to the team a player last appeared for, since there's no cloud-reachable roster feed. It scores immediately when a box score says final; if the NBA later corrects a stat, an admin rescores with `?force=true`.
 
 **Statuses never move backwards** (`schemas.can_move_status`), except between scheduled and postponed. Three writers touch games (seed, scoreboard, schedule refresh) and they aren't equally fresh; without this, an old harvest re-seeded or a stale feed would turn a finished game back into a scheduled one, wipe its score and reopen its picks.
+
+## WebSockets for the chat (step 17)
+
+Agreed 2026-11-18. Anthony chose the scope (chat only, live scores stay on the poller) and the simpler frontend (reconnect and catch up, no polling fallback).
+
+**Chat only.** Live scores stay on the poller plus the frontend's 30-second refetch. The poller only checks the NBA every 30 seconds, so pushing scores wouldn't make them meaningfully fresher, and it's a separate process that can't reach the api's sockets without a channel between them (Postgres `LISTEN/NOTIFY` or Redis), which isn't worth it for that gain.
+
+**The socket only delivers.** Posting, editing, deleting and liking stay REST, with their validation, mutes and room rules untouched. Each chat write broadcasts an event after its commit; a failed broadcast never fails the request.
+
+**One endpoint, one room per game:** `WS /api/games/{game_id}/ws`, under `/api/` so the existing proxies route it. An unknown game is refused (`WebSocketException`, code 1008). The endpoint's loop only waits on `receive_text()` to notice the disconnect and ignores anything the client sends.
+
+**No authentication on the socket.** Reading a room is already public, and no event carries anything reader-specific, so there's no token to pass (a browser can't set an `Authorization` header on a WebSocket, which would mean a token in the url). `liked_by_me` is the one per-reader field: it's never in an event, and a reader's own like or unlike response sets it, as now.
+
+**Events**, JSON with a `type`:
+- `message.created`: the message as a `ChatMessageResponse`, `liked_by_me` false (nobody has liked a new message).
+- `message.edited`: `{message_id, body, edited_at}`.
+- `message.deleted`: `{message_id}`, from the author or an admin.
+- `message.likes`: `{message_id, like_count}`, after a like or an unlike.
+
+Pydantic models in `schemas.py`. WebSocket routes aren't in the OpenAPI schema, so `gen:api` can't generate the event types: the frontend writes a small `ChatEvent` union by hand in `features/chat/`, reusing the generated `ChatMessage` for `message.created`. A deliberate, documented exception to "types come from the backend".
+
+**Rules for the broadcasts**, easy to get wrong:
+- **Commit, then broadcast.** The database is the source of truth and a reconnecting tab catches up from it, so nothing may be delivered that isn't saved. Broadcasting first would show every tab a message whose commit then failed.
+- **The socket never receives chat messages.** Unlike the docs' chat example, the browser doesn't `send` over it: a message goes through the existing `POST`, which already checks the token, the room, mutes and length, and saves.
+- **Nothing per-reader in an event.** `message.created` reuses the poster's `ChatMessageResponse` but sets `liked_by_me` to false; like events carry only `like_count`.
+- **Read `game_id` before a delete** (`delete_message` and the admin one): after `db.delete` the row is gone and the room is unknown.
+- **A failed send is caught inside `broadcast`** and drops that socket. A tab that closed mid-broadcast must never turn someone's `POST` into a 500.
+- **The socket route refuses with `WebSocketException`, not `HTTPException`.** Helpers like `get_game` raise `HTTPException`, which means nothing on a socket, so the route catches it and closes with 1008.
+
+**`chat_hub.py` is the FastAPI docs' `ConnectionManager`, keyed by game:** `dict[str, set[WebSocket]]` with `connect`, `disconnect` and `broadcast(game_id, event)`. A send that fails (a tab closed mid-broadcast) drops that socket rather than stopping the loop. It lives in the api process's memory, so it works with exactly one api process, which is what `fastapi dev`, Compose and the Dockerfile run today. A second process (more workers, or a second container) would split each room in two; that's when Redis pub/sub (or `encode/broadcaster`) goes behind `broadcast`, and nothing else has to change.
+
+**What stays on the 30-second refresh:** the room opening and closing (time-based, read from `room_open`, `opens_at`, `closes_at`), a renamed user or new picture, a deleted account's messages turning "[deleted]". Rare, and the refresh already handles them. Mutes aren't broadcast: they only affect the muted person, whose next post gets the 403.
+
+**Frontend: the socket replaces the 3-second poll, with no polling fallback.** `useChatSocket(gameId)` opens the socket while `roomOpen` (the condition the 3-second poll uses today) at `ws(s)://<location.host>/api/games/<id>/ws`, relative to the page like every other call. Events go through the pure functions in `state.ts` (`upsert`, `remove`, and an `applyEvent` for edits and like counts), tested the same way. Your own `POST` response and the broadcast of the same message both `upsert` by id, so whichever arrives second changes nothing. On close it reconnects with backoff (1s, 2s, 4s, up to 30s) and the chat shows a small "Reconnecting…" label; on every open, including the first, it refetches the chat (invalidates `["chat", gameId]`), which fills in whatever was missed: new messages and also edits, deletes and likes, which an `?after=` fetch wouldn't bring. `mergeNewest` already handles a gap longer than a page (a laptop that slept) by starting from the newest page, with older ones a scroll back away. A polling fallback while disconnected was considered and left out: reconnecting plus that catch-up already guarantees nothing is lost, and one delivery path is simpler to build, test and explain. The 3-second `?after=` poll is removed; the 30-second newest-page refresh stays (room opening and closing, renames, "[deleted]").
+
+**Proxies.** Vite: the `/api` entry becomes `{ target: 'http://localhost:8000', ws: true }`. nginx: the socket path gets `proxy_http_version 1.1`, the `Upgrade` and `Connection: upgrade` headers and a long `proxy_read_timeout` (nginx drops a proxied connection after 60 idle seconds by default; uvicorn's protocol pings should keep it alive, the timeout is the backstop).
+
+**Tests.** `conftest.py`'s `client` is Starlette's `TestClient`, which has `websocket_connect`: two sockets in a room, a `POST` through the client, both receive `message.created`; an unknown game is refused; a socket that has gone doesn't break the request.
+
+**Trying it with several accounts.** The token is in `localStorage`, which every tab on `localhost:5173` shares, so logging in in a second tab replaces the first tab's account. Use an incognito window or a second browser for each extra account. Delivery itself doesn't depend on accounts (the socket is anonymous), so plain extra tabs are enough to watch messages arrive.
 
 ## Learned from the real data (step 3)
 
@@ -149,12 +190,10 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 ## Open
 
-- Frontend is untouched. The sneaker store's React app was deliberately not copied. The frontend's design and build order were agreed on 2026-11-17 and live in `frontend/SPEC.md`: a Vite + React + TypeScript single-page app, starting with three small backend changes (step 16.0).
+- The frontend (step 16) is built from `frontend/SPEC.md`, agreed 2026-11-17. The sneaker store's React app was deliberately not copied.
 - Not decided: whether private friend leagues (step 5-8 era) are worth building, and whether reactions (step 10) are needed at all.
 
-## Next: a choice of direction
+## Next
 
-The backend is complete and runs itself. What's left:
-
-- **Step 16, the React frontend** (next), then **step 17, deploying** to a host chosen then (see the AWS note above).
-- **The frontend**, now that there's a complete API to build against. Chat polls `?after=<last id>` every few seconds; WebSockets are a later upgrade (and need Redis pub/sub once there's more than one api container).
+- **Step 17, WebSockets for the chat** (next), built in the sub-steps in `README.md` from the design above.
+- **Step 18, deploying**, to a host chosen then (see the AWS note above).

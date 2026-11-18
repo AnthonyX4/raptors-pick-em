@@ -221,6 +221,6 @@ Each sub-step ends working and committed, the same way the backend was built.
 
 ## Later
 
-- WebSockets for the chat (then Redis pub/sub once there's more than one api container). Posting stays `POST`; the socket only delivers.
+- WebSockets for the chat: now step 17, designed in the root `HANDOFF.md` ("WebSockets for the chat"). Posting stays `POST`; the socket only delivers. Redis pub/sub once there's more than one api process.
 - Per-user pick history on profiles (needs an endpoint).
 - Private friend leagues, if ever.

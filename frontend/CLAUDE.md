@@ -1,6 +1,6 @@
 # CLAUDE.md (frontend)
 
-Guidance for Claude Code when working in `frontend/`. The root `CLAUDE.md` covers the backend.
+Guidance for Claude Code when working in `frontend/`. The root `CLAUDE.md` covers the whole project and `Backend/CLAUDE.md` the backend.
 
 ## Status
 

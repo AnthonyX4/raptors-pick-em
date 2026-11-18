@@ -2,7 +2,7 @@
 
 A fan site built around each Toronto Raptors game: predict the result and stat leaders before tipoff, then talk about the game in its own chatroom.
 
-The backend is a FastAPI + SQLAlchemy (async) API. It started from the account system of my [sneaker store project](https://github.com/9JB9/ecommercePlatformFASTAPI) and is being built one step at a time.
+The backend is a FastAPI + SQLAlchemy (async) API. It started from the account system of my [sneaker store project](https://github.com/AnthonyX4/fullstack-sneaker-store) and is being built one step at a time.
 
 ## Status
 
@@ -35,9 +35,15 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 16.7 | Profile and settings | Done |
 | 16.8 | Frontend in Docker (nginx) and Compose | Done |
 | 16.9 | Polish: loading, empty and error states, accessibility, code splitting, README | Done |
-| 17 | Deploy (host to be chosen) | |
+| 17 | WebSockets for the chat (design in `HANDOFF.md`, "WebSockets for the chat") | |
+| 17.1 | Backend: `chat_hub.py` connection manager and the `WS /api/games/{game_id}/ws` endpoint, with tests | |
+| 17.2 | Backend: every chat write (post, edit, delete, admin delete, like, unlike) broadcasts an event to the game's room, with tests | |
+| 17.3 | Proxies: Vite's dev proxy and nginx forward the WebSocket upgrade; checked through Compose | |
+| 17.4 | Frontend: `useChatSocket` applies events to the cached chat, reconnects and catches up from the database; replaces the 3-second poll | |
+| 17.5 | Test it live with several tabs and accounts, then update `Backend/CLAUDE.md`, `frontend/CLAUDE.md` and `frontend/SPEC.md` | |
+| 18 | Deploy (host to be chosen) | |
 
-Later: WebSockets for the chat.
+Later: Redis pub/sub for the chat, once more than one api process runs. Live scores stay on the poller and 30-second refetches.
 
 ## What it looks like
 
