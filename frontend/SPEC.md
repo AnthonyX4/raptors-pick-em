@@ -165,8 +165,9 @@ How it maps to the backend: `features/*/api.ts` ≈ a router, `types/api.d.ts` �
 - `GET /api/games/{id}/messages` returns `ChatMessagePage`: `messages` (oldest first), `has_older`, `has_newer`, `room_open`, `opens_at`, `closes_at`. Cursor pagination by message id, not skip/limit.
 - `useGameChat(gameId)` keeps one list of messages keyed by `message_id` and does three things:
   1. **Load**: the newest page (no cursor).
-  2. **Poll for new messages** every 3 seconds with `?after=<newest id>`, only while `room_open` and the tab is visible. Append.
-  3. **Refresh recent messages** every 30 seconds by refetching the newest page and merging it in: replace `body`, `edited_at`, `like_count`, `liked_by_me`, and drop any id inside that page's id range that's no longer there (deleted). `?after=` alone only ever returns new ids, so this is what makes other people's edits, deletes and likes show up. Edits only happen in the first 5 minutes, so recent messages are where they happen. Like counts on old messages can drift until a reload; WebSockets fix that later.
+  2. **Live events** (step 17, replacing the 3-second `?after=` poll that 16.5 shipped with): while `room_open`, `useChatSocket` holds `WS /api/games/{id}/ws` and applies each event to the list: `message.created` (added unless already held), `message.edited` (`body`, `edited_at`), `message.deleted` (dropped), `message.likes` (`like_count`, never `liked_by_me`, since an event says nothing about who liked). The socket only delivers: posting, editing, deleting and liking are still the requests below. The event shapes aren't in the OpenAPI schema (websocket routes aren't), so `features/chat/events.ts` writes the `ChatEvent` union by hand: the one place this app doesn't use a generated type, mirroring `Backend/schemas.py`.
+  3. **Catch up and refresh**: every time the socket opens, the first time too, refetch the newest page and merge it in; and do the same every 30 seconds regardless. The merge replaces `body`, `edited_at`, `like_count`, `liked_by_me`, and drops any id inside that page's id range that's no longer there (deleted), so whatever a dropped connection missed (new messages, edits, deletes, likes) arrives. The 30-second refetch is also what brings what no event carries: the room opening and closing, renames and new pictures, a deleted account's messages turning "[deleted]".
+- When the socket closes, retry after 1s, 2s, 4s ... up to 30s and show a small "Reconnecting…" label in the chat's header. There's no polling fallback: reconnecting plus the catch-up is the whole recovery.
 - Scrolling back: `?before=<oldest id>` while `has_older`. Keep the scroll position when older messages are added above, and only auto-scroll to the bottom if the reader was already at the bottom.
 - Posting: `POST /api/games/{id}/messages` `{body}` (1 to 500 characters after trimming). Own edits, deletes and likes return the updated message, so apply the response straight away.
 - `author: null` means the author deleted their account: show "[deleted]".
@@ -199,7 +200,7 @@ Keep them in one place per feature so invalidation can't miss: `["games", filter
 
 - Dev: `npm run dev` on port 5173, with the backend on 8000 (`uv run fastapi dev main.py`, or `docker compose up` for the whole backend).
 - `frontend/Dockerfile`: a node stage runs `npm ci && npm run build`, an nginx stage serves `dist/`.
-- `nginx.conf`: `location /api/` and `location /static/` → `proxy_pass http://api:8000`; `location /` → `try_files $uri /index.html` (without this, refreshing `/games/123` is a 404).
+- `nginx.conf`: `location /api/` and `location /static/` → `proxy_pass http://api:8000`; `location /` → `try_files $uri /index.html` (without this, refreshing `/games/123` is a 404). Step 17 added a regex location for the chat's websocket (`/api/games/<id>/ws`) with HTTP/1.1, the `Upgrade` headers and a long read timeout; Vite's `/api` proxy has `ws: true`.
 - A `frontend` service in the root `docker-compose.yml`, depending on `api` being healthy, published on a port (e.g. 8080). The backend's `FRONTEND_URL` must match where the frontend is served, since emails link there.
 
 ## Build order
@@ -213,7 +214,7 @@ Each sub-step ends working and committed, the same way the backend was built.
 | 16.2 | Auth: login, register, forgot and reset password, `AuthProvider`, `ProtectedRoute`, the 401 retry |
 | 16.3 | Games: games page, game header with live refresh, box score, home page's next game |
 | 16.4 | Picks: `PickForm` built from categories, `useSavePicks`, locked and pending states, everyone's picks after tipoff |
-| 16.5 | Chat: `useGameChat` (load, poll, refresh, scroll back), post, edit, delete, like, closed and muted states, admin moderation |
+| 16.5 | Chat: `useGameChat` (load, poll, refresh, scroll back), post, edit, delete, like, closed and muted states, admin moderation (the poll was replaced by a websocket in step 17.4) |
 | 16.6 | Leaderboard: season standings, per-game standings on the game page |
 | 16.7 | Profile and settings |
 | 16.8 | Docker: frontend image, nginx, Compose service, `FRONTEND_URL` |
@@ -221,6 +222,6 @@ Each sub-step ends working and committed, the same way the backend was built.
 
 ## Later
 
-- WebSockets for the chat: now step 17, designed in the root `HANDOFF.md` ("WebSockets for the chat"). Posting stays `POST`; the socket only delivers. Redis pub/sub once there's more than one api process.
+- Redis pub/sub behind the chat's `broadcast`, once there's more than one api process (WebSockets themselves are built: step 17, designed in the root `HANDOFF.md`, "WebSockets for the chat").
 - Per-user pick history on profiles (needs an endpoint).
 - Private friend leagues, if ever.

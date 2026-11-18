@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatPage } from "./api"
+import type { ChatEvent } from "./events"
 
 // the chat of one game as the page holds it, and the pure rules for changing it. kept apart from react
 // so the merging (the part that's easy to get subtly wrong) can be tested without a browser
@@ -45,17 +46,6 @@ export function mergeNewest(state: ChatState | undefined, page: ChatPage): ChatS
   }
 }
 
-// messages newer than the newest one held (the 3 second poll). the same state back when nothing changed,
-// so an idle room doesn't re-render every poll
-export function appendNew(state: ChatState, page: ChatPage): ChatState {
-  const known = new Set(state.messages.map((message) => message.message_id))
-  const added = page.messages.filter((message) => !known.has(message.message_id))
-  const sameRoom =
-    state.roomOpen === page.room_open && state.opensAt === page.opens_at && state.closesAt === page.closes_at
-  if (added.length === 0 && sameRoom && state.hasNewer === page.has_newer) return state
-  return { ...state, messages: [...state.messages, ...added], hasNewer: page.has_newer, ...room(page) }
-}
-
 // the page just older than the oldest one held (scrolling back)
 export function prependOlder(state: ChatState, page: ChatPage): ChatState {
   const known = new Set(state.messages.map((message) => message.message_id))
@@ -74,4 +64,29 @@ export function upsert(state: ChatState, message: ChatMessage): ChatState {
 
 export function remove(state: ChatState, messageId: number): ChatState {
   return { ...state, messages: state.messages.filter((m) => m.message_id !== messageId) }
+}
+
+const holds = (state: ChatState, messageId: number) => state.messages.some((m) => m.message_id === messageId)
+
+// one event from the room's websocket. an event about a message that isn't held changes nothing, and so does
+// a repeat of one already applied: the same state comes back, so the list doesn't re-render for nothing
+export function applyEvent(state: ChatState, event: ChatEvent): ChatState {
+  switch (event.type) {
+    case "message.created":
+      // not upsert: your own post's response may have arrived first, and if you've since liked it, the
+      // event's "no likes yet" copy would undo that
+      return holds(state, event.message.message_id) ? state : upsert(state, event.message)
+    case "message.deleted":
+      return holds(state, event.message_id) ? remove(state, event.message_id) : state
+    case "message.edited":
+      return patch(state, event.message_id, { body: event.body, edited_at: event.edited_at })
+    case "message.likes":
+      // liked_by_me stays as it is: an event never says who liked
+      return patch(state, event.message_id, { like_count: event.like_count })
+  }
+}
+
+function patch(state: ChatState, messageId: number, changes: Partial<ChatMessage>): ChatState {
+  if (!holds(state, messageId)) return state
+  return { ...state, messages: state.messages.map((m) => (m.message_id === messageId ? { ...m, ...changes } : m)) }
 }

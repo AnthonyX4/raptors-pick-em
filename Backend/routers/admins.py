@@ -12,6 +12,9 @@ import models
 
 from config import settings
 
+# Live chat
+from chat_hub import hub
+
 # Dependencies
 from auth import get_current_admin
 
@@ -25,7 +28,7 @@ from schemas import (
 )
 from routers.pick_categories import category_key
 from routers.games import TEAM_LOADERS
-from schemas import GameScoreResponse, MuteCreate, MuteResponse, PaginatedMutesResponse
+from schemas import GameScoreResponse, MessageDeletedEvent, MuteCreate, MuteResponse, PaginatedMutesResponse
 import scoring
 # mutes are checked by the chat, so they're timed by the chat's clock: one clock, which tests move as one
 from routers import messages as chat
@@ -196,8 +199,10 @@ async def delete_message(message_id: int, db: Annotated[AsyncSession, Depends(ge
     if not message:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Message not found")
 
+    game_id = message.game_id # read first: once the row is deleted there's no telling which room it was in
     await db.delete(message) # its likes go with it (cascade)
     await db.commit()
+    await hub.broadcast(game_id, MessageDeletedEvent(message_id=message_id))
 
 # PUT, stop a user posting for a number of hours. PUT because muting again replaces the old mute:
 # a second mute for 1 hour shortens a 24 hour one, which is how an admin corrects a mistake

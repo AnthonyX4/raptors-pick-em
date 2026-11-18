@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
 import { toast } from "sonner"
 import { ApiError } from "@/lib/api-client"
 import {
@@ -14,18 +14,15 @@ import {
 } from "./api"
 import { chatErrorMessage } from "./errors"
 import { chatKey } from "./keys"
-import { appendNew, mergeNewest, newestId, oldestId, prependOlder, remove, upsert, type ChatState } from "./state"
+import { mergeNewest, oldestId, prependOlder, remove, upsert, type ChatState } from "./state"
+import { useChatSocket } from "./useChatSocket"
 
-const POLL_MS = 3_000 // new messages, while the room is open
-const REFRESH_MS = 30_000 // the newest page again, for other people's edits, deletes and likes
-const MAX_CATCH_UP_PAGES = 10 // a tab that was hidden for ages doesn't fetch the whole room in one go
-
-const visible = () => document.visibilityState === "visible"
+const REFRESH_MS = 30_000 // the newest page again, for what no event carries: the room opening and closing, renames, "[deleted]"
 
 // the chat of one game, held in the query cache as one ChatState (see state.ts for how it changes).
 // three things keep it current: the query itself, which refetches the newest page every 30s and merges it
-// in; a 3s poll for messages newer than the newest one, only while the room is open and the tab is showing;
-// and loadOlder, for scrolling back
+// in; the room's websocket (useChatSocket), which applies each event the moment it arrives while the room is
+// open; and loadOlder, for scrolling back
 export function useGameChat(gameId: string) {
   const queryClient = useQueryClient()
   const key = chatKey(gameId)
@@ -38,45 +35,7 @@ export function useGameChat(gameId: string) {
     refetchInterval: REFRESH_MS,
   })
 
-  const roomOpen = query.data?.roomOpen ?? false
-  useEffect(() => {
-    if (!roomOpen) return
-    let busy = false
-    let stopped = false
-
-    async function poll() {
-      if (busy || !visible()) return
-      busy = true
-      try {
-        for (let i = 0; i < MAX_CATCH_UP_PAGES; i++) {
-          const state = queryClient.getQueryData<ChatState>(key)
-          if (!state) return
-          const page = await fetchMessages(gameId, { after: newestId(state) })
-          if (stopped) return
-          queryClient.setQueryData<ChatState>(key, (current) => current && appendNew(current, page))
-          if (!page.has_newer) return
-        }
-      } catch {
-        // a failed poll is just tried again in 3 seconds
-      } finally {
-        busy = false
-      }
-    }
-
-    const timer = setInterval(() => void poll(), POLL_MS)
-    // a tab coming back to the front catches up at once instead of waiting for the next tick
-    const onVisible = () => {
-      if (!visible()) return
-      void poll()
-      void queryClient.invalidateQueries({ queryKey: key })
-    }
-    document.addEventListener("visibilitychange", onVisible)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-      document.removeEventListener("visibilitychange", onVisible)
-    }
-  }, [roomOpen, gameId, key, queryClient])
+  const { reconnecting } = useChatSocket(gameId, query.data?.roomOpen ?? false)
 
   const loadOlder = useCallback(async () => {
     const state = queryClient.getQueryData<ChatState>(key)
@@ -99,6 +58,7 @@ export function useGameChat(gameId: string) {
     isError: query.isError,
     refetch: query.refetch,
     isFetching: query.isFetching,
+    reconnecting,
     loadOlder,
     loadingOlder,
   }

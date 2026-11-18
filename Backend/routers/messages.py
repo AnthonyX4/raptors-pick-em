@@ -2,7 +2,10 @@ from datetime import datetime, timedelta, UTC
 from typing import Annotated
 
 # Fastapi
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, WebSocketException, status
+
+# Live chat
+from chat_hub import hub
 
 # Database
 from database import get_db
@@ -18,7 +21,10 @@ from config import settings
 from auth import CurrentUser, OptionalUser
 
 # Schemas
-from schemas import ChatMessageCreate, ChatMessagePage, ChatMessageResponse, ChatMessageUpdate, GameStatus, UserPublic
+from schemas import (
+    ChatMessageCreate, ChatMessagePage, ChatMessageResponse, ChatMessageUpdate, GameStatus,
+    MessageCreatedEvent, MessageDeletedEvent, MessageEditedEvent, MessageLikesEvent, UserPublic,
+)
 
 # one router for both shapes of path: the collection lives under its game (/games/{game_id}/messages),
 # a single message is addressed by its own id (/messages/{message_id}). mounted at /api in main.py
@@ -205,7 +211,10 @@ async def create_message(
     db.add(new_message)
     await db.commit()
 
-    return await message_response(db, new_message.message_id, user)
+    response = await message_response(db, new_message.message_id, user)
+    # after the commit, never before: a tab must not be shown a message that then failed to save
+    await hub.broadcast(game_id, MessageCreatedEvent(message=response))
+    return response
 
 
 # PATCH, fix one of your messages, within 5 minutes of posting it
@@ -234,7 +243,12 @@ async def update_message(
     message.edited_at = now
     await db.commit()
 
-    return await message_response(db, message.message_id, user)
+    response = await message_response(db, message.message_id, user)
+    await hub.broadcast(
+        message.game_id,
+        MessageEditedEvent(message_id=response.message_id, body=response.body, edited_at=message.edited_at),
+    )
+    return response
 
 
 # DELETE, withdraw one of your messages, any time (an admin deletes others' through /api/admin/messages)
@@ -246,8 +260,10 @@ async def delete_message(message_id: int, user: CurrentUser, db: Annotated[Async
     message = await get_message(db, message_id)
     check_author(message, user)
 
+    game_id = message.game_id # read first: once the row is deleted there's no telling which room it was in
     await db.delete(message) # its likes go with it (cascade)
     await db.commit()
+    await hub.broadcast(game_id, MessageDeletedEvent(message_id=message_id))
 
 
 # PUT, like a message. PUT, not POST: liking twice is the same as liking once, so it's idempotent
@@ -264,7 +280,10 @@ async def like_message(message_id: int, user: CurrentUser, db: Annotated[AsyncSe
         db.add(models.MessageLike(message_id=message_id, user_id=user.user_id))
         await db.commit()
 
-    return await message_response(db, message_id, user)
+    response = await message_response(db, message_id, user)
+    # sent even if this was a repeat like: the event holds the total, so repeating it changes nothing
+    await hub.broadcast(message.game_id, MessageLikesEvent(message_id=message_id, like_count=response.like_count))
+    return response
 
 
 # DELETE, take your like back. also idempotent: unliking something you never liked is fine
@@ -273,7 +292,7 @@ async def like_message(message_id: int, user: CurrentUser, db: Annotated[AsyncSe
     response_model=ChatMessageResponse,
 )
 async def unlike_message(message_id: int, user: CurrentUser, db: Annotated[AsyncSession, Depends(get_db)]):
-    await get_message(db, message_id)
+    message = await get_message(db, message_id)
     await db.execute(
         sql_delete(models.MessageLike).where(
             models.MessageLike.message_id == message_id, models.MessageLike.user_id == user.user_id,
@@ -281,4 +300,29 @@ async def unlike_message(message_id: int, user: CurrentUser, db: Annotated[Async
     )
     await db.commit()
 
-    return await message_response(db, message_id, user)
+    response = await message_response(db, message_id, user)
+    await hub.broadcast(message.game_id, MessageLikesEvent(message_id=message_id, like_count=response.like_count))
+    return response
+
+
+# WS, listen to a game's chat live. the socket only delivers: messages are still posted, edited, deleted
+# and liked through the routes above. public like reading is, so no token and no room-open check (a closed
+# room can reopen). no origin check either: the socket is anonymous and read-only, nothing to hijack
+@router.websocket("/games/{game_id}/ws")
+async def chat_socket(game_id: str, websocket: WebSocket, db: Annotated[AsyncSession, Depends(get_db)]):
+    try:
+        await get_game(db, game_id)
+    except HTTPException: # get_game's http error means nothing on a socket
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
+    # the session would otherwise stay open as long as this handler runs, hours for a tab left open,
+    # and its connection with it. closing it hands the connection back to the pool
+    await db.close()
+
+    await hub.connect(game_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text() # only here to notice the disconnect, what the client sends is ignored
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.disconnect(game_id, websocket)

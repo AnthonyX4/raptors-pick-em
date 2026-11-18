@@ -24,7 +24,7 @@ function LoginPrompt() {
 // the closed state: before opens_at it says when, otherwise it's over
 export function ChatRoom({ gameId }: { gameId: string }) {
   const { user, isLoading: authLoading } = useAuth()
-  const { chat, isPending, isError, refetch, isFetching, loadOlder, loadingOlder } = useGameChat(gameId)
+  const { chat, isPending, isError, refetch, isFetching, reconnecting, loadOlder, loadingOlder } = useGameChat(gameId)
   const actions = useChatActions(gameId)
   const nowMs = useNow(15_000)
 
@@ -72,9 +72,13 @@ export function ChatRoom({ gameId }: { gameId: string }) {
       aria-label="Game chat"
       className="flex h-[calc(100vh-7rem)] min-h-96 flex-col overflow-hidden rounded-md border border-border bg-card max-lg:h-[36rem]"
     >
-      <h2 className="border-b border-border px-4 py-3 font-display text-2xl leading-none font-bold tracking-wide uppercase">
-        Chat
-      </h2>
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <h2 className="font-display text-2xl leading-none font-bold tracking-wide uppercase">Chat</h2>
+        {/* always mounted, so a screen reader hears it when the text appears */}
+        <p role="status" className="text-xs text-muted-foreground">
+          {reconnecting ? "Reconnecting…" : ""}
+        </p>
+      </div>
       {body}
       {footer && <div className="border-t border-border p-4">{footer}</div>}
     </section>

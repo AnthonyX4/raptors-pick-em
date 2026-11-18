@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
 
@@ -341,6 +341,32 @@ class ChatMessagePage(BaseModel):
     room_open: bool # whether posting is allowed right now, so the frontend knows to show the input box
     opens_at: datetime
     closes_at: datetime | None # None until the game has gone final
+
+
+# what the chat socket sends (step 17). websocket routes aren't in the openapi schema, so the frontend
+# writes matching types by hand. each event carries its own `type` so the client can tell them apart.
+# nothing per-reader is in an event: liked_by_me is only ever set by a reader's own REST response
+class MessageCreatedEvent(BaseModel):
+    type: Literal["message.created"] = "message.created"
+    message: ChatMessageResponse # liked_by_me is false: nobody has liked a message that was just posted
+
+
+class MessageEditedEvent(BaseModel):
+    type: Literal["message.edited"] = "message.edited"
+    message_id: int
+    body: str
+    edited_at: datetime
+
+
+class MessageDeletedEvent(BaseModel):
+    type: Literal["message.deleted"] = "message.deleted"
+    message_id: int
+
+
+class MessageLikesEvent(BaseModel):
+    type: Literal["message.likes"] = "message.likes"
+    message_id: int
+    like_count: int # the total, not +1 or -1, so a repeated or missed event can't leave a tab with the wrong number
 
 
 class MuteCreate(BaseModel):

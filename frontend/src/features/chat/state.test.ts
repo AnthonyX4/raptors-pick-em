@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { ChatMessage, ChatPage } from "./api"
-import { appendNew, fromPage, mergeNewest, newestId, oldestId, prependOlder, remove, upsert } from "./state"
+import type { ChatEvent } from "./events"
+import { applyEvent, fromPage, mergeNewest, newestId, oldestId, prependOlder, remove, upsert } from "./state"
 
 const message = (id: number, extra: Partial<ChatMessage> = {}): ChatMessage => ({
   message_id: id,
@@ -81,20 +82,50 @@ describe("mergeNewest", () => {
   })
 })
 
-describe("appendNew", () => {
-  it("adds only the messages it doesn't hold", () => {
-    const held = fromPage(page([5, 6]))
-    expect(ids(appendNew(held, page([6, 7, 8])))).toEqual([5, 6, 7, 8])
+describe("applyEvent", () => {
+  const edited = (id: number): ChatEvent => ({ type: "message.edited", message_id: id, body: "fixed", edited_at: "x" })
+  const likes = (id: number, count: number): ChatEvent => ({ type: "message.likes", message_id: id, like_count: count })
+  const deleted = (id: number): ChatEvent => ({ type: "message.deleted", message_id: id })
+
+  it("adds a created message in id order", () => {
+    const held = fromPage(page([5, 7]))
+    expect(ids(applyEvent(held, { type: "message.created", message: message(6) }))).toEqual([5, 6, 7])
   })
 
-  it("returns the same state when nothing changed", () => {
-    const held = fromPage(page([5, 6]))
-    expect(appendNew(held, page([]))).toBe(held)
-  })
-
-  it("notices the room closing", () => {
+  it("ignores a created message that is already held, keeping what you did to it", () => {
     const held = fromPage(page([5]))
-    expect(appendNew(held, page([], { room_open: false })).roomOpen).toBe(false)
+    const liked = upsert(held, message(5, { like_count: 1, liked_by_me: true }))
+    const next = applyEvent(liked, { type: "message.created", message: message(5) })
+    expect(next).toBe(liked)
+    expect(next.messages[0]).toMatchObject({ like_count: 1, liked_by_me: true })
+  })
+
+  it("changes only the body and edited_at on an edit", () => {
+    const held = upsert(fromPage(page([5, 6])), message(6, { like_count: 2, liked_by_me: true }))
+    const next = applyEvent(held, edited(6))
+    expect(next.messages[1]).toMatchObject({ body: "fixed", edited_at: "x", like_count: 2, liked_by_me: true })
+    expect(next.messages[0]).toBe(held.messages[0])
+  })
+
+  it("removes a deleted message", () => {
+    expect(ids(applyEvent(fromPage(page([5, 6, 7])), deleted(6)))).toEqual([5, 7])
+  })
+
+  it("sets the like count and keeps liked_by_me", () => {
+    const held = upsert(fromPage(page([5])), message(5, { like_count: 1, liked_by_me: true }))
+    expect(applyEvent(held, likes(5, 4)).messages[0]).toMatchObject({ like_count: 4, liked_by_me: true })
+  })
+
+  it("returns the same state for a message it doesn't hold", () => {
+    const held = fromPage(page([5]))
+    expect(applyEvent(held, edited(99))).toBe(held)
+    expect(applyEvent(held, deleted(99))).toBe(held)
+    expect(applyEvent(held, likes(99, 3))).toBe(held)
+  })
+
+  it("applies the same like total twice to the same result", () => {
+    const once = applyEvent(fromPage(page([5])), likes(5, 3))
+    expect(applyEvent(once, likes(5, 3)).messages).toEqual(once.messages)
   })
 })
 

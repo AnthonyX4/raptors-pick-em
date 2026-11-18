@@ -5,7 +5,7 @@ Written 2026-11-12, updated 2026-11-14 after setting the AWS deploy aside, and 2
 ## Where things stand
 
 - Steps 1 to 12 are done: the backend is a complete Pick'em app that runs itself, with a chat room per game and reminder emails. Step 13 packaged it as a Docker image, step 14 moved it to Postgres with Alembic migrations, step 15 runs it all with Docker Compose. Accounts and auth; the real 2026-27 Raptors season; pick categories; picks, locked at tipoff and revealed once a game starts; scoring from box scores; leaderboards; the poller, which keeps games, box scores and scores current from the NBA's CDN; and game chat with likes and moderation.
-- Step 16, the React frontend, is done (16.0 to 16.9): every page in `frontend/SPEC.md` is real, and Compose serves it on port 8080. The chat polls; step 17 adds WebSockets to it (design below). Deploying is now step 18.
+- Step 16, the React frontend, is done (16.0 to 16.9): every page in `frontend/SPEC.md` is real, and Compose serves it on port 8080. Step 17, WebSockets for the chat, is built (17.1 to 17.5, design below): the chat is live over a socket instead of polling, and was tried live through nginx on :8080 (see "Tried live" below). Deploying is now step 18.
 - 298 backend tests passed on SQLite and on Postgres at the end of step 15 (`cd Backend && uv run pytest`, a few minutes; run it in halves if a tool times out).
 - On GitHub at https://github.com/AnthonyX4/raptors-pick-em, `main` tracking `origin/main`.
 - `nba_data.json` is committed: 30 teams, 80 games (11 played at harvest time), 523 players, 304 box score lines. Seeding from it needs no NBA access, which matters for Docker and CI.
@@ -154,15 +154,48 @@ Pydantic models in `schemas.py`. WebSocket routes aren't in the OpenAPI schema, 
 
 **`chat_hub.py` is the FastAPI docs' `ConnectionManager`, keyed by game:** `dict[str, set[WebSocket]]` with `connect`, `disconnect` and `broadcast(game_id, event)`. A send that fails (a tab closed mid-broadcast) drops that socket rather than stopping the loop. It lives in the api process's memory, so it works with exactly one api process, which is what `fastapi dev`, Compose and the Dockerfile run today. A second process (more workers, or a second container) would split each room in two; that's when Redis pub/sub (or `encode/broadcaster`) goes behind `broadcast`, and nothing else has to change.
 
+**Decisions made building 17.1** (the hub and the socket route, built):
+- **The socket route closes its database session before it starts waiting.** A `Depends(get_db)` session lasts as long as the handler, which for a socket is as long as the tab stays open, and the game lookup leaves a transaction holding a pooled connection. Without `await db.close()` every open tab would pin one connection. The route still uses `Depends(get_db)` so the tests' override works.
+- **`broadcast` takes a Pydantic model** and sends `model_dump_json()`, so datetimes serialize the way the REST responses do. The four event models are written in 17.2, with the routes that send them; 17.1's tests use a throwaway `Ping` model.
+- **The route is in `routers/messages.py`**, beside the chat routes it mirrors, and reuses its `get_game`. A closed room still connects: only an unknown game is refused.
+- **Left as is:** broadcasts send to sockets one after another, so one slow client delays the others (`asyncio.gather` is the fix if it ever matters), and `receive_text()` raises on a binary frame, which no browser client of ours sends; the `finally` still removes the socket.
+
+**Decisions made building 17.2** (the broadcasts, built):
+- **`message.created` nests the message** (`{type, message}`) rather than flattening its fields, so the frontend can pass `event.message` straight to `upsert` as the generated `ChatMessage`. The other three events are flat.
+- **Likes and unlikes always broadcast**, even when nothing changed (a repeat like, unliking what you never liked). The event holds the total, not a delta, so a repeat changes nothing, and it saves an "did it change?" branch.
+- **No helper around `hub.broadcast`**: it already catches failed sends, so each route is one `await hub.broadcast(...)` after its commit. `liked_by_me` in `message.created` is false by construction (a new message has no likes), and a test checks it rather than the route setting it.
+- **Edited events take `edited_at` from the saved message** and the route's response supplies `like_count`, so no route runs a query only for the event.
+
 **What stays on the 30-second refresh:** the room opening and closing (time-based, read from `room_open`, `opens_at`, `closes_at`), a renamed user or new picture, a deleted account's messages turning "[deleted]". Rare, and the refresh already handles them. Mutes aren't broadcast: they only affect the muted person, whose next post gets the 403.
 
 **Frontend: the socket replaces the 3-second poll, with no polling fallback.** `useChatSocket(gameId)` opens the socket while `roomOpen` (the condition the 3-second poll uses today) at `ws(s)://<location.host>/api/games/<id>/ws`, relative to the page like every other call. Events go through the pure functions in `state.ts` (`upsert`, `remove`, and an `applyEvent` for edits and like counts), tested the same way. Your own `POST` response and the broadcast of the same message both `upsert` by id, so whichever arrives second changes nothing. On close it reconnects with backoff (1s, 2s, 4s, up to 30s) and the chat shows a small "Reconnecting…" label; on every open, including the first, it refetches the chat (invalidates `["chat", gameId]`), which fills in whatever was missed: new messages and also edits, deletes and likes, which an `?after=` fetch wouldn't bring. `mergeNewest` already handles a gap longer than a page (a laptop that slept) by starting from the newest page, with older ones a scroll back away. A polling fallback while disconnected was considered and left out: reconnecting plus that catch-up already guarantees nothing is lost, and one delivery path is simpler to build, test and explain. The 3-second `?after=` poll is removed; the 30-second newest-page refresh stays (room opening and closing, renames, "[deleted]").
 
+**Decisions made building 17.4** (the frontend, built; the several-tab check is the one thing left, see Next):
+- **`useChatSocket(gameId, enabled)`** takes `roomOpen` as a second argument, which the design's `useChatSocket(gameId)` left out: the hook needs it and the chat query that holds it lives in `useGameChat`, which calls the socket hook and returns `reconnecting`.
+- **`message.created` for a message already held changes nothing**, instead of `upsert`: your own `POST` response and the broadcast both arrive, in either order, and a late event's "no likes yet" copy must not undo a like you made in between. The other events about a message that isn't held also return the same state.
+- **`appendNew` was removed** with the poll, along with its tests: nothing else used it. `hasNewer` stays in `ChatState` (always false now that nothing fetches `?after=`, left to keep this step small), and so does the `after` option of `fetchMessages`, which the backend still supports.
+- **The visibility handler went with the poll.** A hidden tab keeps its socket; a laptop that slept reconnects when it wakes and the open refetches. TanStack's refetch on window focus still applies.
+- **`parseChatEvent` checks only `type`**, not the shape of the rest: the backend is the only sender, and a full runtime check (zod) would repeat its models. An unknown type is ignored so a newer backend can add events.
+- **The retry counter resets on open**, so a server that accepts the socket and drops it at once is retried every second. Fine for now; resetting on the first event instead would back off in that case.
+- **In dev, React Strict Mode** mounts the effect twice, so the console may show "WebSocket is closed before the connection is established" once; harmless.
+
 **Proxies.** Vite: the `/api` entry becomes `{ target: 'http://localhost:8000', ws: true }`. nginx: the socket path gets `proxy_http_version 1.1`, the `Upgrade` and `Connection: upgrade` headers and a long `proxy_read_timeout` (nginx drops a proxied connection after 60 idle seconds by default; uvicorn's protocol pings should keep it alive, the timeout is the backstop).
+
+**Decisions made building 17.3** (the proxies, built and checked: a socket opened through nginx on :8080 and through Vite on :5173 connects for a real game and is refused for an unknown one, exactly as straight to the api):
+- **nginx gets its own `location ~ ^/api/games/[^/]+/ws$`** rather than upgrade headers on all of `/api/`. A regex location wins over the `/api/` prefix, so only the socket path gets HTTP/1.1, the `Upgrade` headers and the long timeout, and ordinary requests keep the default behaviour. It repeats `Host` and the `X-Forwarded-*` headers because `proxy_set_header` isn't inherited from a sibling location.
+- **`Connection "upgrade"` is a literal**, not the `map $http_upgrade $connection_upgrade` from nginx's docs: this location only ever serves the socket, so the map's "close when there is no Upgrade header" case can't happen.
+- **`proxy_read_timeout 1h`**, an arbitrary "long": the reconnect in 17.4 covers a drop either way. The idle timeout itself wasn't waited out in the check.
+- **A broadcast arriving through nginx** was not checked here, only the handshake (an unknown game is refused, which only the api can do). 17.5 did: see "Tried live".
 
 **Tests.** `conftest.py`'s `client` is Starlette's `TestClient`, which has `websocket_connect`: two sockets in a room, a `POST` through the client, both receive `message.created`; an unknown game is refused; a socket that has gone doesn't break the request.
 
 **Trying it with several accounts.** The token is in `localStorage`, which every tab on `localhost:5173` shares, so logging in in a second tab replaces the first tab's account. Use an incognito window or a second browser for each extra account. Delivery itself doesn't depend on accounts (the socket is anonymous), so plain extra tabs are enough to watch messages arrive.
+
+**Tried live (17.5, 2026-11-18)**, through Compose on :8080 (nginx), in Chrome driven by Claude: two tabs on one game, one logged in as a regular user, the other an observer. A second regular user and the admin acted through the same endpoints the buttons call (their tokens fetched from `POST /api/users/token`), because the browser blocked a second origin and normal tabs share one login. Passed: a post (via API and via the UI) appeared in the other tab within about a second, once; an edit (API and UI menu) showed "(edited)"; a like and an unlike changed the count in the other tab while only the liker's own heart filled; an author's delete (UI menu and confirm dialog) and an admin delete removed the message in both tabs; with `docker compose stop api` both tabs showed "Reconnecting…" and kept working, and after `docker compose start api` the label cleared and a new post arrived live. Not covered:
+- **The catch-up of events missed while disconnected** is only unit-tested: nothing can be written while the api is down, so a real missed edit, delete or like needs a tab that lost its connection while the api was up (a laptop lid closed, the network switched off) and a second device posting meanwhile.
+- **How fast the label clears** after the api returns wasn't timed (it had already cleared when measured). The retry cap is 30s.
+- **The admin's own UI** (Delete and Mute author in the menu, `MuteDialog`) wasn't driven; the admin delete went through its endpoint.
+- **The sockets were not inspected as frames**; delivery under a second says it was the socket rather than the 30-second refetch.
 
 ## Learned from the real data (step 3)
 
@@ -195,5 +228,5 @@ Captured from a GitHub runner by `capture-nba-samples.yml`, trimmed copies in `B
 
 ## Next
 
-- **Step 17, WebSockets for the chat** (next), built in the sub-steps in `README.md` from the design above.
+- **Step 17, WebSockets for the chat: done** (17.1 to 17.5; backend socket tests and the frontend's 83 tests pass, and it was tried live through nginx on :8080, see "Tried live"). Still unchecked, if you want to close them: the catch-up after a real disconnect while the api is up, and the admin's Delete and Mute buttons driven in the UI.
 - **Step 18, deploying**, to a host chosen then (see the AWS note above).
