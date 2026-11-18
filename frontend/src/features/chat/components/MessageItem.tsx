@@ -14,7 +14,7 @@ import { formatDateTime, formatTime } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { ChatMessage } from "../api"
 import type { ChatActions } from "../hooks"
-import { ConfirmDialog } from "./ConfirmDialog"
+import { ConfirmDialog } from "@/components/ConfirmDialog"
 import { MessageComposer } from "./MessageComposer"
 import { MuteDialog } from "./MuteDialog"
 

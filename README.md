@@ -32,7 +32,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 16.4 | Picks: form built from the categories, locked and scored states, everyone's picks after tipoff | Done |
 | 16.5 | Chat: polling, scroll back, post, edit, delete, like, admin moderation | Done |
 | 16.6 | Leaderboards | Done |
-| 16.7 | Profile and settings | |
+| 16.7 | Profile and settings | Done |
 | 16.8 | Frontend in Docker (nginx) and Compose | |
 | 16.9 | Polish: loading, empty and error states, accessibility | |
 | 17 | Deploy (host to be chosen) | |

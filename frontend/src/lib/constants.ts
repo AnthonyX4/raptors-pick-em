@@ -4,3 +4,6 @@ export const FOLLOWED_TEAM = "TOR"
 
 // the longest chat message, mirroring the backend's message_max_length (500): the api still checks it
 export const MESSAGE_MAX_LENGTH = 500
+
+// the largest profile picture, mirroring the backend max_upload_size_bytes (5 MB): the api still checks it
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024
