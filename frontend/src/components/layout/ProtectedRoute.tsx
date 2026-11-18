@@ -1,5 +1,6 @@
 import { useRef } from "react"
 import { Navigate, Outlet, useLocation } from "react-router"
+import { Loading } from "@/components/states"
 import { useAuth } from "@/features/auth/useAuth"
 
 // waits for the startup /me call so a refresh on /settings doesn't bounce a logged-in person to /login
@@ -8,7 +9,7 @@ export function ProtectedRoute() {
   const location = useLocation()
   const hadUser = useRef(false)
 
-  if (isLoading) return <p className="text-muted-foreground">Loading…</p>
+  if (isLoading) return <Loading what="your account" className="mx-auto h-64 max-w-2xl" />
   if (user) hadUser.current = true
   if (!user) {
     // a visitor who never logged in is asked to; someone who just logged out (or whose session expired)

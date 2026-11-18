@@ -1,7 +1,9 @@
 import { GameCard } from "@/features/games/components/GameCard"
 import { useSeasonGames } from "@/features/games/hooks"
+import { ErrorState } from "@/components/states"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 
 function GameList({ games, empty }: { games: React.ReactNode[]; empty: string }) {
   if (games.length === 0) return <p className="py-8 text-muted-foreground">{empty}</p>
@@ -9,19 +11,21 @@ function GameList({ games, empty }: { games: React.ReactNode[]; empty: string })
 }
 
 export function GamesPage() {
-  const { data, isPending, isError } = useSeasonGames()
+  const { data, isPending, isError, refetch, isFetching } = useSeasonGames()
+  useDocumentTitle("Games")
 
   let body: React.ReactNode
   if (isPending) {
     body = (
-      <div className="flex flex-col gap-3">
+      <div role="status" aria-busy="true" className="flex flex-col gap-3">
+        <span className="sr-only">Loading the schedule…</span>
         {Array.from({ length: 6 }, (_, i) => (
           <Skeleton key={i} className="h-[72px] w-full" />
         ))}
       </div>
     )
   } else if (isError) {
-    body = <p className="text-muted-foreground">Couldn't load the schedule. Try refreshing the page.</p>
+    body = <ErrorState what="the schedule" onRetry={() => void refetch()} retrying={isFetching} />
   } else {
     // the api sends oldest first, which suits what's coming; results read better newest first
     const upcoming = data.filter((game) => game.status !== "final")

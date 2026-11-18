@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import { useAuth } from "@/features/auth/useAuth"
 import { useNow } from "@/hooks/useNow"
 import { formatDateTime } from "@/lib/format"
@@ -24,16 +24,16 @@ function LoginPrompt() {
 // the closed state: before opens_at it says when, otherwise it's over
 export function ChatRoom({ gameId }: { gameId: string }) {
   const { user, isLoading: authLoading } = useAuth()
-  const { chat, isPending, isError, loadOlder, loadingOlder } = useGameChat(gameId)
+  const { chat, isPending, isError, refetch, isFetching, loadOlder, loadingOlder } = useGameChat(gameId)
   const actions = useChatActions(gameId)
   const nowMs = useNow(15_000)
 
   let body: React.ReactNode
   let footer: React.ReactNode = null
   if (isPending) {
-    body = <Skeleton className="m-4 h-40" />
+    body = <Loading what="the chat" className="m-4 h-40" />
   } else if (isError || !chat) {
-    body = <p className="p-4 text-sm text-muted-foreground">Couldn't load the chat. Try refreshing the page.</p>
+    body = <ErrorState what="the chat" onRetry={() => void refetch()} retrying={isFetching} className="p-4" />
   } else {
     body = (
       <MessageList

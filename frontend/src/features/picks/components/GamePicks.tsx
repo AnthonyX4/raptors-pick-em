@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import { useAuth } from "@/features/auth/useAuth"
 import type { GameDetail } from "@/features/games/api"
 import { useCategories, useMyPicks, useRoster } from "../hooks"
@@ -39,9 +39,19 @@ function PickEditor({ game }: { game: GameDetail }) {
 
   let body: React.ReactNode
   if (categories.isPending || roster.isPending || saved.isPending) {
-    body = <Skeleton className="h-72 w-full" />
+    body = <Loading what="the pick form" className="h-72 w-full" />
   } else if (categories.isError || roster.isError || saved.isError) {
-    body = <p className="text-sm text-muted-foreground">Couldn't load the pick form. Try refreshing the page.</p>
+    // ask again for whatever failed; the ones that loaded are cached and answer at once
+    const retry = () => {
+      for (const query of [categories, roster, saved]) if (query.isError) void query.refetch()
+    }
+    body = (
+      <ErrorState
+        what="the pick form"
+        onRetry={retry}
+        retrying={categories.isFetching || roster.isFetching || saved.isFetching}
+      />
+    )
   } else {
     body = <PickForm game={game} categories={categories.data} roster={roster.data} saved={saved.data} />
   }
@@ -59,7 +69,7 @@ function PickEditor({ game }: { game: GameDetail }) {
 export function GamePicks({ game }: { game: GameDetail }) {
   const { user, isLoading } = useAuth()
 
-  if (isLoading) return <Skeleton className="h-48 w-full" />
+  if (isLoading) return <Loading what="your picks" className="h-48 w-full" />
   if (game.picks_open) return user ? <PickEditor game={game} /> : <LoginPrompt />
 
   // a postponed game is closed but never played: its picks stay hidden until it is

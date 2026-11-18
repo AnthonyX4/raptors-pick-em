@@ -1,4 +1,4 @@
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import type { GameDetail, PlayerStat, Team } from "../api"
 
 function TeamTable({ team, stats }: { team: Team; stats: PlayerStat[] }) {
@@ -7,6 +7,7 @@ function TeamTable({ team, stats }: { team: Team; stats: PlayerStat[] }) {
       <h3 className="mb-2 font-display text-2xl font-bold tracking-wide uppercase">{team.full_name}</h3>
       <div className="rounded-md border border-border bg-card">
         <Table>
+          <TableCaption className="sr-only">{team.full_name} box score</TableCaption>
           <TableHeader>
             <TableRow>
               <TableHead>Player</TableHead>

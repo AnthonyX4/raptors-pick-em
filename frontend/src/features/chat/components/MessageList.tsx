@@ -58,12 +58,21 @@ export function MessageList({ messages, hasOlder, loadingOlder, onLoadOlder, me,
 
   function toBottom() {
     const el = scroller.current
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: reduced ? "auto" : "smooth" })
   }
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={scroller} onScroll={onScroll} className="h-full overflow-y-auto py-2">
+      {/* role=log is a polite live region for messages appended over time, so new ones are read out */}
+      <div
+        ref={scroller}
+        onScroll={onScroll}
+        role="log"
+        aria-label="Chat messages"
+        aria-relevant="additions"
+        className="h-full overflow-y-auto py-2"
+      >
         {hasOlder && (
           <div className="flex justify-center pb-2">
             <Button variant="ghost" size="sm" onClick={onLoadOlder} disabled={loadingOlder}>
@@ -87,7 +96,7 @@ export function MessageList({ messages, hasOlder, loadingOlder, onLoadOlder, me,
           onClick={toBottom}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 gap-1 rounded-full font-bold tracking-wide uppercase shadow-lg"
         >
-          <ArrowDown className="size-3.5" />
+          <ArrowDown aria-hidden className="size-3.5" />
           New messages
         </Button>
       )}

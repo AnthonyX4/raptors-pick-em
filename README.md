@@ -24,7 +24,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 13 | Docker image | Done: one image runs both the API and the poller, built and smoke-tested in CI |
 | 14 | Postgres and Alembic | Done: asyncpg, migrations checked in CI, tests run on Postgres |
 | 15 | Docker Compose (api, poller, Postgres) | Done: `docker compose up` runs db, migrations, api and poller; tested in CI |
-| 16 | React frontend (design and build order in `frontend/SPEC.md`) | In progress |
+| 16 | React frontend (design and build order in `frontend/SPEC.md`) | Done |
 | 16.0 | Backend prep: 7-day tokens, `is_admin` on `/me`, `editable_until` on chat messages | Done |
 | 16.1 | Scaffold: Vite + TypeScript, Tailwind, shadcn, React Router, TanStack Query, dev proxy, generated API types | Done |
 | 16.2 | Auth: login, register, forgot and reset password, protected routes | Done |
@@ -34,10 +34,37 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 16.6 | Leaderboards | Done |
 | 16.7 | Profile and settings | Done |
 | 16.8 | Frontend in Docker (nginx) and Compose | Done |
-| 16.9 | Polish: loading, empty and error states, accessibility | |
+| 16.9 | Polish: loading, empty and error states, accessibility, code splitting, README | Done |
 | 17 | Deploy (host to be chosen) | |
 
 Later: WebSockets for the chat.
+
+## What it looks like
+
+A React single-page app (Vite, TypeScript, Tailwind, shadcn/ui) over the API. Everything below is on the site, in a dark Raptors-red theme:
+
+- **Home**: the live game, or the next one with a countdown to tipoff.
+- **Games**: the season's schedule, upcoming and finished.
+- **A game**: the score and clock (live), your picks (open until tipoff, then everyone's), the box score once it's played, the game's own standings once it's scored, and its chat room beside it.
+- **Leaderboard**: season standings, with ties sharing a rank.
+- **Account**: sign up, log in, reset a password by email, a profile, and settings (username, email, password, picture, reminder emails, delete account).
+
+The frontend never decides a rule the API already decides (whether picks are open, whether the chat room is open, how long a message can be edited): it reads those from the API's responses. `frontend/CLAUDE.md` describes the code and `frontend/SPEC.md` the design it was built from.
+
+## Running the frontend
+
+Needs [Node](https://nodejs.org/) 22 and the backend running on port 8000 (see below). From `frontend/`:
+
+```
+npm install
+npm run dev        # http://localhost:5173, forwards /api and /static to the backend on port 8000
+npm test           # the logic tests (Vitest), no browser needed
+npm run build      # type check, then the production build into dist/
+npm run lint
+npm run gen:api    # regenerate src/types/api.d.ts from the running backend, after a backend schema change
+```
+
+Or without Node at all, the whole app from the repo root: `docker compose up -d --build` serves it on http://localhost:8080 (see "Everything in Docker" below).
 
 ## Running the backend
 

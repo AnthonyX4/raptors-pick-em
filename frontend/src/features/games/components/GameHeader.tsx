@@ -12,7 +12,10 @@ function TeamBlock({ team, score, align }: { team: Team; score: number | null; a
         {team.nickname}
       </div>
       {score !== null && (
-        <div className="mt-3 font-display text-7xl leading-none font-bold tabular-nums max-md:text-5xl">{score}</div>
+        <div className="mt-3 font-display text-7xl leading-none font-bold tabular-nums max-md:text-5xl">
+          <span className="sr-only">Score: </span>
+          {score}
+        </div>
       )}
     </div>
   )
@@ -51,12 +54,16 @@ function Centre({ game }: { game: Game }) {
 export function GameHeader({ game }: { game: Game }) {
   return (
     <section className="rounded-md border border-border bg-card p-8 max-md:p-5">
+      {/* the teams below are display type, not headings: this is the page's one h1 */}
+      <h1 className="sr-only">
+        {game.away_team.full_name} at {game.home_team.full_name}
+      </h1>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <StatusBadge game={game} />
         <span className="text-sm text-muted-foreground">{formatDateTime(game.tipoff_utc)}</span>
         {game.arena_name && (
           <span className="flex items-center gap-1 text-sm text-muted-foreground">
-            <MapPin className="size-3.5" />
+            <MapPin aria-hidden className="size-3.5" />
             {game.arena_name}
           </span>
         )}

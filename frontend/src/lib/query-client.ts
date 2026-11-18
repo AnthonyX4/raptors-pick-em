@@ -8,7 +8,7 @@ export const queryClient = new QueryClient({
       // a 403/404/409 won't change by asking again; only network trouble and 5xx are worth a retry
       retry: (failureCount, error) => {
         if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
-        return failureCount < 2
+        return failureCount < 1 // one retry keeps a dead api from showing skeletons for ~15s per query
       },
     },
   },

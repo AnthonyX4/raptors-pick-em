@@ -1,4 +1,6 @@
-// the centred panel every auth page sits in
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
+
+// the centred panel every auth page sits in, which also names the tab
 export function AuthCard({
   title,
   description,
@@ -10,6 +12,7 @@ export function AuthCard({
   children: React.ReactNode
   footer?: React.ReactNode
 }) {
+  useDocumentTitle(title)
   return (
     <div className="mx-auto w-full max-w-md rounded-md border border-border bg-card p-8 shadow-lg max-md:p-6">
       <h1 className="font-display text-4xl leading-none font-bold tracking-wide uppercase">{title}</h1>

@@ -11,7 +11,7 @@ export function GameCard({ game }: { game: Game }) {
   return (
     <Link
       to={`/games/${game.game_id}`}
-      className="group flex items-center gap-6 rounded-md border border-border bg-card px-5 py-4 transition-colors hover:border-white/40 max-md:gap-3 max-md:px-4"
+      className="group flex items-center gap-6 rounded-md border border-border bg-card px-5 py-4 transition-colors hover:border-white/40 focus-visible:border-white/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none max-md:gap-3 max-md:px-4"
     >
       <div className="w-28 shrink-0 text-sm max-md:w-20">
         <div className="font-bold">{formatDate(game.tipoff_utc)}</div>
@@ -30,7 +30,7 @@ export function GameCard({ game }: { game: Game }) {
         </div>
       )}
       <StatusBadge game={game} className="max-md:hidden" />
-      <ChevronRight className="size-5 shrink-0 text-muted-foreground transition-colors group-hover:text-white" />
+      <ChevronRight aria-hidden className="size-5 shrink-0 text-muted-foreground transition-colors group-hover:text-white" />
     </Link>
   )
 }

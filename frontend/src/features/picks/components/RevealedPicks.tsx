@@ -2,7 +2,7 @@ import { useMemo } from "react"
 import { Link } from "react-router"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import { useAuth } from "@/features/auth/useAuth"
 import type { GameDetail } from "@/features/games/api"
 import { cn } from "@/lib/utils"
@@ -33,9 +33,9 @@ export function RevealedPicks({ game }: { game: GameDetail }) {
 
   let body: React.ReactNode
   if (query.isPending) {
-    body = <Skeleton className="h-32 w-full" />
+    body = <Loading what="everyone's picks" className="h-32 w-full" />
   } else if (query.isError) {
-    body = <p className="text-sm text-muted-foreground">Couldn't load everyone's picks. Try refreshing the page.</p>
+    body = <ErrorState what="everyone's picks" onRetry={() => void query.refetch()} retrying={query.isFetching} />
   } else if (groups.length === 0) {
     body = <p className="text-muted-foreground">Nobody made a pick for this game.</p>
   } else {

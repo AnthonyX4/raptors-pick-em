@@ -39,6 +39,7 @@ export function MessageItem({ message, me, nowMs, roomOpen, actions }: MessageIt
   const canDelete = isOwn || isAdmin
   const canMute = isAdmin && !!author && !isOwn
   const hasMenu = canEdit || canDelete || canMute
+  const byline = author ? `by ${author.username}` : "by a deleted user" // so a button says which message it's on
 
   // liking needs an open room, taking a like back doesn't
   const canLike = !!me && (roomOpen || message.liked_by_me)
@@ -87,13 +88,18 @@ export function MessageItem({ message, me, nowMs, roomOpen, actions }: MessageIt
         <button
           type="button"
           aria-pressed={message.liked_by_me}
-          aria-label={message.liked_by_me ? "Unlike" : "Like"}
+          aria-label={`${message.liked_by_me ? "Unlike" : "Like"} message ${byline}${
+            message.like_count > 0 ? `, ${message.like_count} ${message.like_count === 1 ? "like" : "likes"}` : ""
+          }`}
           disabled={!canLike || actions.like.isPending}
           onClick={() => actions.like.mutate({ messageId: message.message_id, liked: !message.liked_by_me })}
           className={cn(
             "flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors enabled:hover:bg-white/10 disabled:cursor-default",
             message.liked_by_me ? "text-primary" : "text-muted-foreground",
-            message.like_count === 0 && !message.liked_by_me && "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100",
+            // shown on hover or focus; a touch screen has neither, so there it is always shown
+            message.like_count === 0 &&
+              !message.liked_by_me &&
+              "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
           )}
         >
           <Heart className={cn("size-3.5", message.liked_by_me && "fill-current")} />
@@ -102,8 +108,8 @@ export function MessageItem({ message, me, nowMs, roomOpen, actions }: MessageIt
         {hasMenu && (
           <DropdownMenu>
             <DropdownMenuTrigger
-              aria-label="Message actions"
-              className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity outline-none group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:opacity-100"
+              aria-label={`Actions for message ${byline}`}
+              className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity outline-none group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100 hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:opacity-100"
             >
               <MoreHorizontal className="size-4" />
             </DropdownMenuTrigger>

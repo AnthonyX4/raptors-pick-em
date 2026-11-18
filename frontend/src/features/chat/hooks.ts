@@ -93,7 +93,15 @@ export function useGameChat(gameId: string) {
     }
   }, [gameId, key, loadingOlder, queryClient])
 
-  return { chat: query.data, isPending: query.isPending, isError: query.isError, loadOlder, loadingOlder }
+  return {
+    chat: query.data,
+    isPending: query.isPending,
+    isError: query.isError,
+    refetch: query.refetch,
+    isFetching: query.isFetching,
+    loadOlder,
+    loadingOlder,
+  }
 }
 
 // everything a person can do to a message. each action applies the api's answer to the cached chat straight

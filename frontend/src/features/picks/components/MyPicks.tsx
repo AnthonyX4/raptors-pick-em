@@ -1,17 +1,17 @@
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import type { GameDetail } from "@/features/games/api"
 import { answerText, pointsText, totalPoints } from "../answer"
 import { useMyPicks } from "../hooks"
 
 // your own picks, read-only: once the game has started, or while it's postponed
 export function MyPicks({ game }: { game: GameDetail }) {
-  const { data: picks, isPending, isError } = useMyPicks(game.game_id, game.status)
+  const { data: picks, isPending, isError, refetch, isFetching } = useMyPicks(game.game_id, game.status)
 
   let body: React.ReactNode
   if (isPending) {
-    body = <Skeleton className="h-24 w-full" />
+    body = <Loading what="your picks" className="h-24 w-full" />
   } else if (isError) {
-    body = <p className="text-sm text-muted-foreground">Couldn't load your picks. Try refreshing the page.</p>
+    body = <ErrorState what="your picks" onRetry={() => void refetch()} retrying={isFetching} />
   } else if (picks.length === 0) {
     body = <p className="text-muted-foreground">You didn't make any picks for this game.</p>
   } else {

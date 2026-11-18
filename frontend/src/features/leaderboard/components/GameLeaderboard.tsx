@@ -1,4 +1,4 @@
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import { useGameBoard } from "../hooks"
 import { LeaderboardTable } from "./LeaderboardTable"
 
@@ -9,9 +9,9 @@ export function GameLeaderboard({ gameId }: { gameId: string }) {
 
   let body: React.ReactNode
   if (board.isPending) {
-    body = <Skeleton className="h-32 w-full" />
+    body = <Loading what="the game standings" className="h-32 w-full" />
   } else if (board.isError) {
-    body = <p className="text-sm text-muted-foreground">Couldn't load the standings. Try refreshing the page.</p>
+    body = <ErrorState what="the standings" onRetry={() => void board.refetch()} retrying={board.isFetching} />
   } else if (entries.length === 0) {
     // picks are scored a little after the final buzzer; this asks again until they are
     body = <p className="text-muted-foreground">No scores yet. Picks are scored shortly after the game ends.</p>

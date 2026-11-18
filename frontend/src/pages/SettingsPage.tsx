@@ -4,6 +4,7 @@ import { EmailForm, PasswordForm, UsernameForm } from "@/features/users/componen
 import { AvatarSection } from "@/features/users/components/AvatarSection"
 import { DeleteAccount, RemindersToggle } from "@/features/users/components/RemindersAndDelete"
 import { useAccount } from "@/features/users/hooks"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 
 // only reached through ProtectedRoute, which waits for the user to load
 export function SettingsPage() {
@@ -14,6 +15,7 @@ export function SettingsPage() {
 
 function Settings({ user }: { user: NonNullable<ReturnType<typeof useAuth>["user"]> }) {
   const account = useAccount(user)
+  useDocumentTitle("Settings")
 
   return (
     <section className="mx-auto max-w-2xl">

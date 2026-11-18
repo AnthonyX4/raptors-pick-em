@@ -17,7 +17,7 @@ export function MediaCard({ to, title, cta, image, className }: MediaCardProps) 
     <Link
       to={to}
       className={cn(
-        "group relative block aspect-[1.4] overflow-hidden rounded-md border border-border bg-card shadow-lg",
+        "group relative block aspect-[1.4] overflow-hidden rounded-md border border-border bg-card shadow-lg focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none",
         className,
       )}
     >
@@ -34,13 +34,13 @@ export function MediaCard({ to, title, cta, image, className }: MediaCardProps) 
         </>
       )}
       <div className="absolute inset-0 bg-black/25 transition-colors duration-300 group-hover:bg-black/60" />
-      <h3 className="absolute inset-0 flex items-center justify-center px-6 text-center font-display text-4xl leading-none font-bold tracking-wide uppercase">
+      <h2 className="absolute inset-0 flex items-center justify-center px-6 text-center font-display text-4xl leading-none font-bold tracking-wide uppercase">
         {title}
-      </h3>
+      </h2>
       {cta && (
-        <span className="absolute right-5 bottom-4 flex items-center gap-2 font-display text-lg font-bold tracking-wide uppercase opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+        <span className="absolute right-5 bottom-4 flex items-center gap-2 font-display text-lg font-bold tracking-wide uppercase opacity-0 transition-opacity duration-300 group-hover:opacity-100 group-focus-visible:opacity-100 pointer-coarse:opacity-100">
           {cta}
-          <ArrowRight className="size-4" />
+          <ArrowRight aria-hidden className="size-4" />
         </span>
       )}
     </Link>

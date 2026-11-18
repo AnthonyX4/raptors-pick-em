@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useDocumentTitle } from "@/hooks/useDocumentTitle"
 import { useAuth } from "@/features/auth/useAuth"
 import { useUser } from "@/features/users/hooks"
 import { ApiError } from "@/lib/api-client"
@@ -10,11 +11,13 @@ import { ApiError } from "@/lib/api-client"
 export function ProfilePage() {
   const userId = Number(useParams().userId)
   const { user: me } = useAuth()
-  const { data: user, isPending, error } = useUser(userId)
+  const { data: user, isPending, error, refetch, isFetching } = useUser(userId)
+  useDocumentTitle(user?.username)
 
   if (isPending && Number.isInteger(userId)) {
     return (
-      <div className="mx-auto flex max-w-2xl items-center gap-6">
+      <div role="status" aria-busy="true" className="mx-auto flex max-w-2xl items-center gap-6">
+        <span className="sr-only">Loading the profile…</span>
         <Skeleton className="size-28 rounded-full" />
         <Skeleton className="h-12 w-64" />
       </div>
@@ -30,11 +33,16 @@ export function ProfilePage() {
           {notFound ? "User not found" : "Couldn't load this profile"}
         </h1>
         <p className="mt-3 text-muted-foreground">
-          {notFound ? "There's no one with that id." : "Try refreshing the page."}{" "}
+          {notFound ? "There's no one with that id." : "Check your connection and try again."}{" "}
           <Link to="/leaderboard" className="text-white underline underline-offset-4">
             Back to the leaderboard
           </Link>
         </p>
+        {!notFound && (
+          <Button variant="outline" className="mt-4" onClick={() => void refetch()} disabled={isFetching}>
+            {isFetching ? "Trying…" : "Try again"}
+          </Button>
+        )}
       </section>
     )
   }

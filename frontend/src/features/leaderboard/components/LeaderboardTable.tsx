@@ -1,7 +1,7 @@
 import { Link } from "react-router"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useAuth } from "@/features/auth/useAuth"
 import { cn } from "@/lib/utils"
 import type { LeaderboardEntry } from "../api"
@@ -22,9 +22,13 @@ export function LeaderboardTable({ entries, hasMore, loadingMore, onLoadMore, sh
     <>
       <div className="rounded-md border border-border bg-card">
         <Table>
+          <TableCaption className="sr-only">Standings</TableCaption>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-12">#</TableHead>
+              <TableHead className="w-12">
+                <span aria-hidden>#</span>
+                <span className="sr-only">Rank</span>
+              </TableHead>
               <TableHead>Player</TableHead>
               <TableHead className="text-right">Points</TableHead>
               <TableHead className="text-right">Correct</TableHead>

@@ -1,6 +1,6 @@
 import { Link } from "react-router"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
+import { ErrorState, Loading } from "@/components/states"
 import { formatDateTime, formatPeriod, formatScore } from "@/lib/format"
 import { useNextGame } from "../hooks"
 import { Countdown } from "./Countdown"
@@ -8,12 +8,10 @@ import { StatusBadge } from "./StatusBadge"
 
 // the home page's hero: the live game if one is on, otherwise the next one
 export function NextGame() {
-  const { data: game, isPending, isError } = useNextGame()
+  const { data: game, isPending, isError, refetch, isFetching } = useNextGame()
 
-  if (isPending) return <Skeleton className="h-64 w-full" />
-  if (isError) {
-    return <p className="text-sm text-muted-foreground">Couldn't load the next game. Try refreshing the page.</p>
-  }
+  if (isPending) return <Loading what="the next game" className="h-64 w-full" />
+  if (isError) return <ErrorState what="the next game" onRetry={() => void refetch()} retrying={isFetching} />
   if (!game) {
     return (
       <div className="rounded-md border border-border bg-card p-8">
