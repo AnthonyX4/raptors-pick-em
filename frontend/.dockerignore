@@ -1,0 +1,15 @@
+# What never goes into the build context. `COPY . ./` copies the whole frontend/ folder except these.
+
+# reinstalled inside the image by npm ci: copying a Windows node_modules would break the Linux build
+node_modules/
+# rebuilt inside the image
+dist/
+dist-ssr/
+
+# local only
+.env
+.env.*
+*.local
+*.log
+.vscode/
+.idea/

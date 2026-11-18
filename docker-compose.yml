@@ -4,13 +4,16 @@
 #   docker compose logs -f api       # follow one service (or poller, db, migrate)
 #   docker compose down              # stop and remove the containers, the database volume stays
 #
-# Four services, started in this order:
+# Five services, started in this order:
 #   db       postgres, its data on the raptors-pgdata volume
 #   migrate  runs `alembic upgrade head` once the database answers, then exits
 #   api      starts only after migrate succeeded, healthy once GET /health passes
 #   poller   same condition, exactly one
+#   frontend nginx serving the react app on http://localhost:8080, forwarding /api and /static to the api;
+#            starts once the api is healthy
 #
-# The same image runs migrate, api and poller with different commands, like ECS will.
+# The same image runs migrate, api and poller with different commands, like ECS will. The frontend is
+# its own image (frontend/Dockerfile).
 name: raptors-pick-em
 
 # postgres credentials, local only (ecs uses rds with secrets manager). override them in a .env next to
@@ -22,13 +25,16 @@ x-db-env: &db-env
 
 # what migrate, api and poller share: the image, the app's secrets from Backend/.env, and a
 # DATABASE_URL pointing at the db service. `environment` wins over env_file, so the localhost:5433
-# url in Backend/.env (right for `uv run` on your machine) is replaced by db:5432 (right inside compose)
+# url in Backend/.env (right for `uv run` on your machine) is replaced by db:5432 (right inside compose).
+# FRONTEND_URL is replaced the same way: emails (password reset, pick reminders) link to where the frontend
+# service is served, not to the vite dev server on 5173 that Backend/.env points at
 x-app: &app
   build: ./Backend
   image: raptors-pick-em:local
   env_file: Backend/.env
   environment:
     DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-raptors}:${POSTGRES_PASSWORD:-raptors}@db:5432/${POSTGRES_DB:-raptors}
+    FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
 
 services:
   db:
@@ -79,6 +85,24 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
     stop_grace_period: 30s # a stop lets the tick in progress finish (poller.py handles SIGTERM)
+
+  frontend:
+    build: ./frontend
+    image: raptors-pick-em-frontend:local
+    ports:
+      - "8080:8080"
+    # nginx resolves the name `api` when it starts and refuses to start if it can't, so wait for a healthy api
+    depends_on:
+      api:
+        condition: service_healthy
+    # busybox wget, the alpine image has no curl. 127.0.0.1 because localhost may resolve to ::1
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+    restart: unless-stopped
 
 volumes:
   pgdata:

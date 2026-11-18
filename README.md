@@ -33,7 +33,7 @@ The backend is a FastAPI + SQLAlchemy (async) API. It started from the account s
 | 16.5 | Chat: polling, scroll back, post, edit, delete, like, admin moderation | Done |
 | 16.6 | Leaderboards | Done |
 | 16.7 | Profile and settings | Done |
-| 16.8 | Frontend in Docker (nginx) and Compose | |
+| 16.8 | Frontend in Docker (nginx) and Compose | Done |
 | 16.9 | Polish: loading, empty and error states, accessibility | |
 | 17 | Deploy (host to be chosen) | |
 
@@ -101,11 +101,11 @@ uv run python harvest_scripts/copy_sqlite_to_postgres.py raptors.db
 
 ### Everything in Docker (Compose)
 
-`docker-compose.yml` runs the whole backend from one image: Postgres, a one-shot `migrate` service that runs `alembic upgrade head`, then the API and the poller, which only start once the migration succeeded. Secrets come from `Backend/.env` at run time (never built into the image); Compose swaps its `DATABASE_URL` for the `db` service's address. From the repo root:
+`docker-compose.yml` runs the whole app: Postgres, a one-shot `migrate` service that runs `alembic upgrade head`, then the API and the poller (one image), which only start once the migration succeeded, and the `frontend` (its own image: the built React app behind nginx), which starts once the API is healthy. Secrets come from `Backend/.env` at run time (never built into the image); Compose swaps its `DATABASE_URL` for the `db` service's address and `FRONTEND_URL` for `http://localhost:8080`, so emails link to the frontend service. From the repo root:
 
 ```
-docker compose up -d --build     # build the image and start everything: http://localhost:8000/docs
-docker compose ps                # db and api should say (healthy), migrate "Exited (0)"
+docker compose up -d --build     # build the images and start everything: the app on http://localhost:8080, the API docs on http://localhost:8000/docs
+docker compose ps                # db, api and frontend should say (healthy), migrate "Exited (0)"
 docker compose logs -f poller    # follow a service's output
 docker compose down              # stop and remove the containers, the data stays on the volume
 ```
@@ -116,7 +116,7 @@ On a brand new volume, seed once the API is up (the poller retries until there's
 docker compose run --rm --no-deps api python harvest_scripts/seed.py
 ```
 
-Run the app either this way or with `uv run`, not both at once: they'd both want port 8000, and there must only ever be one poller. `docker compose up -d db` alone gives `uv run` its database.
+The frontend on port 8080 is the same app as `npm run dev` on 5173 (the dev server proxies `/api` and `/static` to port 8000, nginx proxies them to the `api` service), so the browser is on one origin either way. Run the backend either with Compose or with `uv run`, not both at once: they'd both want port 8000, and there must only ever be one poller. `docker compose up -d db` alone gives `uv run` its database.
 
 To refresh the season's data from scratch (rosters included), harvest again and re-seed. Seeding updates rows in place, so it never needs the database wiped:
 

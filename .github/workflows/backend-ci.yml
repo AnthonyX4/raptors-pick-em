@@ -1,7 +1,8 @@
 # Runs on every push to main that touches the backend:
 #   - tests: migrations applied to an empty postgres, checked against the models, undone and reapplied;
 #     then the whole suite on postgres, the database production runs
-#   - compose: docker-compose.yml brought up as you'd run it: db, migrate, api, poller
+#   - compose: docker-compose.yml brought up as you'd run it: db, migrate, api, poller, and the frontend
+#     image (nginx) in front of the api
 name: Backend CI
 
 on:
@@ -9,6 +10,8 @@ on:
     branches: [main]
     paths:
       - "Backend/**"
+      - "frontend/Dockerfile"
+      - "frontend/nginx.conf"
       - "docker-compose.yml"
       - ".github/workflows/backend-ci.yml"
   workflow_dispatch:
@@ -100,6 +103,23 @@ jobs:
           curl -fsS "localhost:8000/api/games?upcoming=true&limit=1" | python3 -m json.tool
           echo "--- pick categories"
           curl -fsS localhost:8000/api/pick-categories | python3 -c "import json,sys; print([c['key'] for c in json.load(sys.stdin)])"
+
+      # the frontend image builds the app (type check included) and waits for a healthy api
+      - name: Start the frontend and check nginx
+        run: |
+          docker compose up -d frontend
+          for i in $(seq 1 60); do curl -fsS localhost:8080/ >/dev/null && break; sleep 1; done
+          docker compose ps frontend --format '{{.Service}} {{.Status}}'
+          echo "runs as: $(docker compose exec frontend id)"
+          echo "--- a deep link falls back to index.html"
+          curl -fsS localhost:8080/games/0022600253 | grep -q '<div id="root">'
+          echo "--- a missing asset is a 404, not index.html"
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/assets/nope.js)" = 404
+          echo "--- /api and /static reach the api"
+          curl -fsS "localhost:8080/api/pick-categories" | python3 -c "import json,sys; print([c['key'] for c in json.load(sys.stdin)])"
+          curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' localhost:8080/static/profile_pics/default.jpg
+          echo "--- emails link to the frontend service"
+          docker compose exec api printenv FRONTEND_URL | grep -x http://localhost:8080
 
       - name: Start the poller and let it run a tick against the live CDN
         run: |
