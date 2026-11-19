@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository. This file covers the w
 
 ## Project overview
 
-Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chat room. The backend (steps 1 to 15) and the React frontend (step 16) are done; step 17 adds WebSockets to the chat.
+Raptors Pick'em: users predict each Toronto Raptors game (winner, margin, stat leaders) before tipoff and chat in a per-game chat room. The backend (steps 1 to 15), the React frontend (step 16) and WebSockets for the chat (step 17) are done; step 18 is deploying.
 
 - `Backend/` — FastAPI + SQLAlchemy (async) on PostgreSQL with Alembic, run with `uv`. Read `Backend/CLAUDE.md` when working there.
 - `frontend/` — React (Vite + TypeScript) single-page app. Read `frontend/CLAUDE.md` when working there.

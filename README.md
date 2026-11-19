@@ -51,7 +51,7 @@ A React single-page app (Vite, TypeScript, Tailwind, shadcn/ui) over the API. Ev
 
 - **Home**: the live game, or the next one with a countdown to tipoff.
 - **Games**: the season's schedule, upcoming and finished.
-- **A game**: the score and clock (live), your picks (open until tipoff, then everyone's), the box score once it's played, the game's own standings once it's scored, and its chat room beside it.
+- **A game**: the score and clock (live), your picks (open until tipoff, then everyone's), the box score once it's played, the game's own standings once it's scored, and its live chat room beside it (over a WebSocket).
 - **Leaderboard**: season standings, with ties sharing a rank.
 - **Account**: sign up, log in, reset a password by email, a profile, and settings (username, email, password, picture, reminder emails, delete account).
 
